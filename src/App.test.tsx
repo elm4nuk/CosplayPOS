@@ -53,6 +53,14 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByText('Rp 25.000', { selector: '.change-box strong' })).toBeInTheDocument()
   })
 
+  it('menjelaskan bahwa badge produk adalah pilihan manual dan ranking laporan otomatis', async () => {
+    const next = await prepared(); await openTill(next); const user = userEvent.setup()
+    expect(screen.getAllByText('Pilihan booth').length).toBeGreaterThan(0)
+    await user.click(screen.getAllByRole('button', { name: /^laporan$/i })[0])
+    expect(await screen.findByText(/belum ada penjualan di event ini/i)).toBeInTheDocument()
+    expect(screen.getByText(/akan muncul otomatis setelah transaksi pertama/i)).toBeInTheDocument()
+  })
+
   it('meminta alasan dan menjelaskan dampak sebelum membatalkan transaksi', async () => {
     const next = await prepared(); const data = await next.getBootstrap(); const product = data.products.find((candidate) => candidate.variants.some((variant) => variant.stock > 0))!; const variant = product.variants.find((x) => x.stock > 0)!
     await next.createTransaction({ eventId: data.events[0].id, items: [{ productId: product.id, variantId: variant.id, quantity: 1 }], cashReceived: variant.price, idempotencyKey: crypto.randomUUID() })

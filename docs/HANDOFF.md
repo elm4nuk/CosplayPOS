@@ -62,10 +62,9 @@ Aturan:
 | Checkout = satu transaksi Dexie (`meta`, `events`, `products`, `transactions`, `stockMovements`) | Semua tersimpan atau tidak sama sekali. Tidak ada stok yang berkurang tanpa transaksi. |
 | `idempotencyKey` per percobaan checkout | Tap ganda / retry tidak menjual dua kali. Kunci sama + isi beda → `IDEMPOTENCY_CONFLICT`. |
 | Stok varian lama tidak bisa diubah lewat `saveProduct()` | Semua perubahan stok punya baris audit di `stockMovements`. |
-| Dua PIN, PBKDF2-SHA256, 150.000 iterasi, salt 16 byte per PIN; tidak ada PIN bawaan | PIN = pengaman layar kasir, **bukan enkripsi data**. Siapa pun dengan akses root/ADB tetap bisa membaca DB. |
-| Kewenangan: PIN kasir **atau** pemilik membuka kasir; aksi sensitif minta PIN pemilik **setiap kali** (bahkan di sesi pemilik) | Kasir yang ditinggal terbuka tidak bisa dipakai untuk void/restore. Sensitif = void, restore, `receiptPrefix`, ganti PIN pemilik. Nama booth/footer/nama kasir bebas diubah. |
-| Lockout terpisah: `unlock` dan `owner`; 5 salah → 30 dtk, berlipat, maks 15 menit | Kasir yang salah-salah di layar buka tidak mengunci persetujuan pemilik. |
-| Restore tanpa PIN **hanya** pada instalasi yang belum onboarding | Instalasi baru tidak punya data untuk dilindungi; backup membawa kedua PIN. Pindah HP / uji restore cukup dari layar setup. |
+| Tanpa login, password, PIN, atau pengunci sesi | `ready()` langsung membuka kasir lokal. Metadata `pin:*`/`pinGuard:*` dari build lama dibersihkan sebagai kompatibilitas. |
+| Konfirmasi dampak untuk aksi destruktif | Void wajib beralasan; restore, arsip, dan hapus memakai dialog konfirmasi. Tidak ada autentikasi tambahan. |
+| Backup/restore tanpa kredensial | Backup baru tidak membawa metadata PIN lama; restore memvalidasi isi lalu mengganti data setelah konfirmasi UI. |
 | Origin WebView dikunci: `https://localhost` | IndexedDB terikat origin. Lihat § 7 Aturan rilis. |
 | `appId` = `com.cosplaypos.booth` (beda dari APK lama `com.cosplaypos.app`) | Bisa terpasang berdampingan dengan APK lama selama masa transisi. Kunci kerja sebelum rilis pertama ke pemakaian nyata; setelah itu **tidak boleh diganti**. |
 | Font via `@fontsource`, ikon via `lucide-react` (SVG inline), gambar di `public/` | Semua masuk bundle. `npm run check:offline` gagal jika ada URL jaringan atau file lokal hilang. (APK lama gagal cek ini: Google Fonts.) |
@@ -74,7 +73,7 @@ Aturan:
 
 | Tabel | Kunci / indeks | Isi |
 |---|---|---|
-| `meta` | `key` | `createdAt`, `activeEventId`, `txSeq` (nomor urut struk), `settings` (`ShopSettings`: `shopName` = nama booth di struk, `footer`, `receiptPrefix`, `defaultCashier`), `pin:cashier` & `pin:owner` (`{ salt, hash, iterations }`), `pinGuard:unlock` & `pinGuard:owner` (lockout, tidak ikut backup) |
+| `meta` | `key` | `createdAt`, `activeEventId`, `txSeq` (nomor urut struk), `settings` (`ShopSettings`: `shopName` = nama booth di struk, `footer`, `receiptPrefix`, `defaultCashier`). Metadata PIN dari build lama bukan kebutuhan aktif dan dibersihkan saat `ready()`. |
 | `categories` | `id`, `sortOrder` | `{ id, name, color, sortOrder }` |
 | `products` | `id`, `categoryId` | `{ id, name, categoryId, description, accent, featured, archived, variants: [{ id, name, price, stock, sku }], createdAt, updatedAt }` |
 | `events` | `id`, `createdAt` | `{ id, name, venue, dateLabel, createdAt }` (aktif = `meta.activeEventId`) |
@@ -117,7 +116,7 @@ archiveProduct(id)
 adjustStock(productId, variantId, delta, reason)               // → stok baru; tidak boleh minus
 saveEvent({ id?, name, venue?, dateLabel? }); setActiveEvent(id)
 voidTransaction(id, reason)
-getEventReport(eventId): { revenue, transactionCount, itemsSold, averageTicket, voidCount, byHour[], topProducts[] }
+getEventReport(eventId): { revenue, transactionCount, itemsSold, averageTicket, voidCount, byHour[], topProducts[], topCategories[] }
 getSettings(); saveSettings({ shopName?, footer?, defaultCashier?, receiptPrefix? })
 // Data demo TIDAK ada di service produksi. Untuk test/dev: seedDemoCatalog(service) dari src/testing/demoCatalog.ts
 ```
@@ -159,12 +158,14 @@ Langkah konkret pembuatan keystore, blok `signingConfigs`, urutan rilis, dan ver
 
 | Perintah | Membuktikan |
 |---|---|
-| `npm test` | `src/services/localPosService.test.ts` (27 test): onboarding dua PIN (atomik, harus beda, format), PIN tidak tersimpan mentah di DB/backup, kewenangan (PIN kasir ditolak untuk void/restore/`receiptPrefix`/`verifyOwnerPin`, PIN pemilik bisa, `details.role`), lockout terpisah, ganti PIN, harga dari DB, stok 1 → jual → tolak, tolak uang/stok kurang tanpa perubahan sebagian, idempotensi paralel, void, laporan dua event terpisah, data bertahan setelah DB ditutup-buka, restore di instalasi baru identik + membawa kedua PIN, tolak backup rusak/tanpa PIN, auto-backup, struk ≤ 32 kolom dengan nama booth, service produksi tidak punya jalan masuk data mock (`loadDemoData` hilang + sumber `localPosService.ts` tidak menyebut `mockData`), `seedDemoCatalog()` mengisi katalog kosong dan menolak katalog terpakai. Plus test UI milik Codex — **sekarang 2 test UI + `tsc -b` gagal** sampai § 9 #11 dikerjakan. |
+| `npm test` | Service lokal, checkout/stok atomik, void beralasan, laporan event termasuk kategori terlaris, persistence, backup tanpa kredensial, struk, pemisahan mock dari produksi, serta alur UI kasir tanpa autentikasi. |
 | `npm run android:e2e` | Gerbang 1–8 di WebView Android sungguhan dengan radio mati: mode pesawat **plus** `svc wifi disable` + `svc data disable`, diverifikasi `dumpsys connectivity` (`Active default network: none`) dan `ping 8.8.8.8` yang harus gagal; keadaan Wi-Fi/data dipulihkan di akhir, juga saat skrip gagal (lihat `docs/ANDROID_SETUP.md`). Lapisan service, bukan tombol layar. |
 | `npx tsc -b && npm run lint` | Tipe dan lint |
 | `npm run check:offline` | Tidak ada URL jaringan di bundle; semua font/gambar ada |
 
-**Hasil uji perangkat terakhir (2026-10-16 14:05 WIB, Claude Code): 19/19 lulus — EMULATOR** `sdk_gphone64_x86_64`, Android 16 (API 36), bukan HP fisik. Laporan: `artifacts/device-e2e/report.json` (berisi blok `network`) dan ringkasan `artifacts/device-e2e/REPORT.md`.
+### Arsip — hasil emulator sebelum revisi tanpa autentikasi
+
+Catatan 19/19 berikut berasal dari build PIN lama pada 2026-10-16 14:05 WIB dan dipertahankan hanya sebagai riwayat. Hasil build tanpa autentikasi yang lebih baru tercatat di § Log; jangan gunakan tabel arsip ini sebagai spesifikasi aktif.
 
 | Gerbang | Hasil di emulator |
 |---|---|
@@ -177,19 +178,27 @@ Langkah konkret pembuatan keystore, blok `signingConfigs`, urutan rilis, dan ver
 | 7 Backup ke luar storage app + restore di instalasi uji | ✅ file di `/sdcard/Documents/CosplayPOS/…json` (6,4 KB); uninstall → install → restore tanpa PIN → data + kedua PIN identik. **Pemilih file restore (UI) belum diuji**; isi file diberikan lewat skrip |
 | 8 Tanpa internet | ✅ 0 request non-`https://localhost` selama seluruh uji; 6 font (Fredoka 600/700, Nunito 400/600/700, Pixelify Sans 700) termuat offline |
 
-⚠ Setelah `android:e2e`, `android/app/src/main/assets/public/` dan `app-debug.apk` berisi **build UJI** (`window.__cosplayPosE2E`). Jalankan `npm run android:apk` sebelum memasang/membagikan APK untuk dipakai — sekarang perintah itu berhenti di `tsc -b` sampai § 9 #11 dikerjakan.
+⚠ Setelah `android:e2e`, `android/app/src/main/assets/public/` dan `app-debug.apk` berisi **build UJI** (`window.__cosplayPosE2E`). Jalankan `npm run android:apk` sebelum memasang/membagikan APK untuk dipakai.
 
 Batas: emulator x86_64 di CPU desktop cepat — belum membuktikan performa HP murah, WebView vendor (Xiaomi/Samsung), atau penghapusan storage oleh sistem. `navigator.storage.persisted()` = `false` di WebView (normal: data tetap di folder app, hilang hanya saat *Hapus data* / uninstall).
 
 Uji manual di HP (wajib sebelum event, belum dilakukan):
-1. Pasang APK → buat dua PIN → isi produk lewat layar Produk → 3 transaksi.
+1. Pasang APK → pastikan langsung membuka kasir → isi produk lewat layar Produk → 3 transaksi.
 2. Mode pesawat → force-stop → buka lagi: font Fredoka/Nunito/Pixelify tampil, data utuh, transaksi bisa.
 3. Ekspor backup → hapus data aplikasi → restore → bandingkan jumlah produk/stok/transaksi.
 4. Pasang APK versi berikut (keystore sama, `versionCode` naik) di atas yang lama → data utuh.
 
 ## 9. Antrian permintaan
 
-### Claude → Codex
+### Koordinasi laporan kategori (2026-10-17)
+
+- Codex mengerjakan audit UI tablet serta laporan pada branch `fix/tablet-report-ux`; tidak ada sesi Claude Code aktif yang terdeteksi pada worktree ini.
+- Perubahan kontrak yang disepakati sebelum menyentuh service: `EventReport` mendapat field aditif `topCategories: { categoryId: string; categoryName: string; quantity: number; revenue: number }[]`.
+- Sumber angka wajib hanya transaksi event yang berstatus `completed`. Kategori dipetakan dari `productId` transaksi ke katalog lokal saat laporan dibuat; produk/kategori lama yang tidak lagi dapat dipetakan dikelompokkan sebagai `Tanpa kategori` agar kuantitas dan omzet tidak hilang.
+- `featured` tetap pilihan manual pengelola produk, bukan hasil penjualan. UI mengganti labelnya menjadi `Pilihan booth`; daftar `Produk terlaris` tetap dihitung otomatis oleh `getEventReport()` dan menampilkan keadaan kosong yang eksplisit bila event belum memiliki penjualan.
+- Untuk perubahan ini Codex mengambil kepemilikan sementara hanya atas `EventReport`, implementasi agregasi di `getEventReport()`, dan test laporannya di `src/services/localPosService.test.ts`. Struktur database, checkout, backup, app ID, dan origin WebView tidak diubah.
+
+### Arsip — Claude → Codex (selesai atau digantikan)
 1. **Wire `posService`** di `App.tsx` menggantikan `mockPosService` (§ 6). Ini satu-satunya penghalang agar APK memakai data sungguhan.
 2. Ganti layar login username/password dengan **alur PIN**: buat PIN (first run) → buka kunci → kunci layar. Tampilkan sisa percobaan dan hitung mundur lockout.
 3. Hapus/ubah semantik "server lokal" (`ConnectionBadge`, kontrol status di Pengaturan, blokir checkout saat `status !== 'connected'`).
@@ -212,6 +221,9 @@ Uji manual di HP (wajib sebelum event, belum dilakukan):
    - `restoreBackup(fileText)` memvalidasi lalu restore tanpa PIN. Konfirmasi dampak adalah tanggung jawab UI Codex.
    - `saveSettings(next)` tidak meminta PIN. Backup baru tidak membawa `pin:*`/`pinGuard:*`; restore backup lama yang masih memuat metadata PIN boleh dibersihkan saat impor selama produk, stok, event, dan transaksi tetap utuh.
    - Perbarui test service dan `scripts/device-e2e.mjs` menjadi gerbang tanpa-PIN. Jangan mengubah file UI milik Codex.
+
+#### Arsip permintaan PIN lama (digantikan butir 0)
+
 1. Ubah kontrak keamanan menjadi dua peran tanpa PIN bawaan/teks mentah:
    - `ready()` mengembalikan `firstRun`, `hasCashierPin`, dan `hasOwnerPin`.
    - `setupPins({ cashierPin, ownerPin, cashierName?, shopName? })` menyimpan kedua PIN secara atomik dan membuka sesi kasir.
@@ -231,6 +243,7 @@ Uji manual di HP (wajib sebelum event, belum dilakukan):
 - Android Auto Backup (`allowBackup="true"`, bawaan template) dibiarkan aktif? **Rekomendasi Claude: `false`** — analisis di `docs/RELEASE_SIGNING.md` § 6. Restore manual sudah divalidasi (checksum, tolak skema lebih baru, snapshot `previous`); Auto Backup tidak, dan bisa menyuntikkan DB lama ke instalasi baru tanpa disadari sehingga stok dan nomor struk tidak konsisten. Belum diubah karena ini keputusan produk.
 
 ## Log
+- 2026-10-17 · Codex · Branch `fix/tablet-report-ux`: audit UI/UX Pro Max dan perbaikan kasir tablet. Pada 761–959 px katalog memakai dua kolom nyaman dengan tombol jumlah/total di header dan keranjang side sheet; ≥960 px kembali berdampingan, HP tetap bottom sheet. Target sentuh, safe area, wrapping nama/varian/harga, sidebar aksesibel, serta checkout viewport pendek diperbaiki. `featured` dilabeli jujur sebagai “Pilihan booth”. `EventReport` mendapat `topCategories` dari transaksi `completed`, UI laporan memiliki empty state. Bukti visual 360/390/768/800/1024/1280 ada di `docs/UI_AUDIT.md`. Hasil: 24/24 test, typecheck, lint, build, audit aset offline lulus; audit produksi 0 vulnerability (audit penuh: 3 moderat dev-only); Android E2E 18/18 lulus pada emulator API 36 tanpa jaringan; APK produksi dibangun ulang. HP fisik belum tersedia.
 - 2026-10-16 · Codex + Claude Code · Revisi tanpa autentikasi selesai. Claude memulai filter metadata PIN pada backup tetapi mencapai batas sesi sebelum service konsisten; Codex menyelesaikan refaktor service/test/E2E berdasarkan kontrak § 9 #0. Hasil: 21/21 test, typecheck, lint, build, audit offline lulus; Android E2E 18/18 lulus pada emulator API 36 dengan radio mati dan nol request jaringan; APK produksi dibangun ulang. UI produksi langsung kasir dan memakai dialog dampak untuk void/restore/hapus/arsip. HP fisik belum tersedia.
 - 2026-10-16 · Codex · Mencatat revisi pemilik: aplikasi langsung ke kasir tanpa login/PIN. Claude diminta menghapus autentikasi dari service/backup/E2E; Codex menangani UI langsung-kasir dan dialog konfirmasi destruktif. Push GitHub ditahan sampai audit rahasia bersih dan pemilik memilih lisensi.
 - 2026-10-16 · Codex + Claude Code · Integrasi UI produksi selesai memakai `posService` untuk onboarding dua PIN, katalog, kategori, event, checkout idempoten, stok, transaksi/void, laporan per event, pengaturan, struk, backup/restore. Mock dikeluarkan dari service produksi. `npm test` 32/32, lint, build, audit offline, dan `npm run android:e2e` 19/19 lulus pada emulator Android 16 dalam mode pesawat + Wi-Fi/data mati. Setelah E2E, `npm run android:apk` membangun ulang APK produksi dan smoke-screen onboarding lulus. Tidak ada HP fisik tersambung; belum dinyatakan siap event pada perangkat nyata.

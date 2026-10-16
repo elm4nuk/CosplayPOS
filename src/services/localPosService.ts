@@ -37,6 +37,7 @@ export type EventReport = {
   voidCount: number
   byHour: { hour: number; revenue: number; transactions: number }[]
   topProducts: { productId: string; productName: string; quantity: number; revenue: number }[]
+  topCategories: { categoryId: string; categoryName: string; quantity: number; revenue: number }[]
 }
 
 export type LocalServiceOptions = {
@@ -308,10 +309,17 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
 
     async getEventReport(eventId: string): Promise<EventReport> {
       await ready()
-      const all = await db.transactions.where('eventId').equals(eventId).toArray()
+      const [all, products, categories] = await Promise.all([
+        db.transactions.where('eventId').equals(eventId).toArray(),
+        db.products.toArray(),
+        db.categories.toArray(),
+      ])
       const done = all.filter((t) => t.status === 'completed')
       const hours = new Map<number, { hour: number; revenue: number; transactions: number }>()
       const top = new Map<string, EventReport['topProducts'][number]>()
+      const productCategories = new Map(products.map((product) => [product.id, product.categoryId]))
+      const categoryNames = new Map(categories.map((category) => [category.id, category.name]))
+      const topCategories = new Map<string, EventReport['topCategories'][number]>()
       for (const t of done) {
         const hour = new Date(t.createdAt).getHours()
         const bucket = hours.get(hour) ?? { hour, revenue: 0, transactions: 0 }
@@ -319,6 +327,11 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         for (const item of t.items) {
           const entry = top.get(item.productId) ?? { productId: item.productId, productName: item.productName, quantity: 0, revenue: 0 }
           entry.quantity += item.quantity; entry.revenue += item.price * item.quantity; top.set(item.productId, entry)
+          const mappedCategoryId = productCategories.get(item.productId)
+          const categoryId = mappedCategoryId && categoryNames.has(mappedCategoryId) ? mappedCategoryId : 'uncategorized'
+          const categoryName = categoryId === 'uncategorized' ? 'Tanpa kategori' : categoryNames.get(categoryId)!
+          const categoryEntry = topCategories.get(categoryId) ?? { categoryId, categoryName, quantity: 0, revenue: 0 }
+          categoryEntry.quantity += item.quantity; categoryEntry.revenue += item.price * item.quantity; topCategories.set(categoryId, categoryEntry)
         }
       }
       const revenue = done.reduce((sum, t) => sum + t.total, 0)
@@ -328,6 +341,7 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         averageTicket: done.length ? Math.round(revenue / done.length) : 0,
         byHour: [...hours.values()].sort((a, b) => a.hour - b.hour),
         topProducts: [...top.values()].sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue).slice(0, 10),
+        topCategories: [...topCategories.values()].sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue),
       }
     },
 

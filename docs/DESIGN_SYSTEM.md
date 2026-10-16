@@ -5,7 +5,7 @@ Dokumen ini adalah sumber keputusan visual frontend untuk kasir booth cosplay. A
 ## Prinsip
 
 1. **Ceria tanpa berisik.** Permukaan krem hangat dan tinta gelap menjaga keterbacaan; pink hanya menandai merek dan aksi utama.
-2. **Kecepatan di atas dekorasi.** Produk, stok, harga, total, dan status koneksi selalu lebih menonjol daripada ornamen.
+2. **Kecepatan di atas dekorasi.** Produk, stok, harga, total, dan status penyimpanan lokal selalu lebih menonjol daripada ornamen.
 3. **Satu aksi utama per konteks.** Pada katalog: tambah barang. Pada keranjang: Bayar. Pada checkout: Simpan pembayaran.
 4. **Status tidak bergantung warna.** Koneksi, stok, validasi, dan transaksi selalu memiliki ikon atau teks.
 5. **Playful yang orisinal.** Ilustrasi memakai bentuk geometris dan maskot abstrak buatan sendiri; tidak memakai karakter atau logo anime pihak lain.
@@ -22,7 +22,7 @@ Dokumen ini adalah sumber keputusan visual frontend untuk kasir booth cosplay. A
 | `--pink` | `#D92F75` | CTA dan identitas utama |
 | `--pink-dark` | `#A91455` | Bayangan CTA dan teks aksen dengan kontras lebih tinggi |
 | `--purple` | `#7653D6` | Focus ring; dibedakan dari CTA |
-| `--mint` / `--mint-soft` | `#168776` / `#DEF7EF` | Sukses, terhubung, stok aman |
+| `--mint` / `--mint-soft` | `#168776` / `#DEF7EF` | Sukses, tersimpan lokal, stok aman |
 | `--amber` / `--amber-soft` | `#A96800` / `#FFF0C7` | Peringatan dan stok menipis |
 | `--red` / `--red-soft` | `#C52F36` / `#FFE5E7` | Error, offline, tindakan berbahaya |
 
@@ -47,7 +47,7 @@ Warna fungsional selalu ditemani label. Teks normal ditargetkan minimal WCAG AA 
 
 ### Tombol
 
-- Tinggi minimum 46 px; target sentuh navigasi/aksi minimal 44×44 px.
+- Tinggi tombol utama minimum 48 px untuk Android; aksi kecil sekunder minimal 44 px dan tetap diberi jarak aman.
 - Primary: pink, teks putih, bayangan bawah gelap sebagai feedback tekan.
 - Secondary: permukaan putih, border netral.
 - Disabled: atribut native `disabled`, opacity 45%, tanpa bayangan.
@@ -58,23 +58,24 @@ Warna fungsional selalu ditemani label. Teks normal ditargetkan minimal WCAG AA 
 - Area ilustrasi geometris orisinal, nama, deskripsi singkat, lalu varian.
 - Setiap baris varian menampilkan nama, harga, dan stok; satu tap menambah varian itu.
 - Produk/varian habis memakai `disabled`, teks “Habis”, dan opacity lebih rendah.
-- “Sering laku” dipakai sebagai shortcut pemindaian visual, bukan sebagai animasi.
+- **“Pilihan booth”** berasal dari flag manual `featured`; label ini tidak boleh disebut “Sering laku” karena bukan hasil transaksi.
+- Produk terlaris otomatis hanya tampil di Laporan dan dihitung dari transaksi event yang tidak dibatalkan.
 
 ### Keranjang dan checkout
 
-- Desktop/tablet: panel keranjang berdampingan dan total sticky di bagian bawah panel.
-- HP: tombol Keranjang berada di bottom navigation; isi muncul sebagai bottom sheet.
-- Quick cash: Rp20.000, Rp50.000, Rp100.000, Rp200.000, Uang pas, dan input manual numerik.
+- Desktop dan tablet lebar (`≥960px`): panel keranjang berdampingan bila katalog masih mendapat ruang untuk dua kolom nyaman.
+- Tablet sempit (`761–959px`): katalog memakai lebar penuh di samping sidebar ringkas. Tombol keranjang di header selalu memperlihatkan jumlah barang dan total; keranjang terbuka sebagai side sheet.
+- HP (`≤760px`): tombol Keranjang berada di bottom navigation; isi muncul sebagai bottom sheet.
+- Quick cash dihitung kontekstual dari total, selalu mencakup Uang pas, dan input manual memakai keypad numerik.
 - Pembayaran kurang menampilkan nominal kekurangan dan menonaktifkan submit.
 - Tombol bayar dinonaktifkan selama request; dialog sukses hanya muncul setelah service mengembalikan transaksi tersimpan.
+- Saat keyboard terbuka atau orientasi berubah, dialog pembayaran mengikuti `dvh`, kontennya dapat digulir, dan baris aksi Simpan tetap sticky di tepi bawah area terlihat.
 
 ### Status
 
 | Status | Presentasi |
 |---|---|
-| Terhubung | Ikon cloud + teks + mint |
-| Menghubungkan ulang | Ikon refresh berputar ringan + teks + amber |
-| Tidak terhubung | Ikon cloud-off + teks + merah |
+| Data lokal siap | Ikon check + teks “Tersimpan di perangkat” + mint |
 | Sukses transaksi | Check, nomor transaksi, rincian, tunai, kembalian |
 | Error | `role="alert"`, sebab singkat, dan langkah pemulihan |
 
@@ -86,17 +87,20 @@ Warna fungsional selalu ditemani label. Teks normal ditargetkan minimal WCAG AA 
 
 ## Responsivitas
 
-- `≤760px`: bottom navigation maksimal lima item, katalog dua kolom (satu pada ≤390 px), keranjang bottom sheet, dialog melekat ke bawah untuk jangkauan ibu jari.
-- `761–1050px`: sidebar ringkas dan katalog + keranjang tetap berdampingan.
-- `>1050px`: sidebar berlabel, katalog adaptif, panel keranjang 350 px.
-- Validasi wajib pada 375, 768, 1024, dan 1440 px; tidak boleh ada scroll horizontal kecuali tabel yang memang diberi wadah.
+- `≤760px`: bottom navigation maksimal lima item, katalog dua kolom fleksibel, keranjang bottom sheet, dialog melekat ke bawah untuk jangkauan ibu jari.
+- `761–959px`: sidebar ringkas, katalog minimal dua kolom 240 px, dan keranjang side sheet lewat tombol total yang selalu terjangkau.
+- `960–1050px`: sidebar ringkas, katalog dua kolom, dan panel keranjang 320 px berdampingan.
+- `>1050px`: sidebar berlabel, katalog adaptif, dan panel keranjang 350 px.
+- Breakpoint diturunkan dari kebutuhan ruang nyata: sidebar + dua kartu katalog + gutter + panel keranjang. Orientasi tidak menjadi satu-satunya sinyal.
+- Validasi wajib pada 360, 390, 768, 800, 1024, dan 1280 px dalam orientasi relevan; halaman kasir tidak boleh memiliki scroll horizontal.
+- Fixed navigation, tombol keranjang, sheet, modal, dan CTA menghormati `env(safe-area-inset-*)`.
 
 ## Motion dan aksesibilitas
 
 - Transisi feedback 160–200 ms; tidak ada animasi yang menunda input.
 - Animasi hanya memakai opacity/transform dan `prefers-reduced-motion` menonaktifkannya.
 - Focus ring 3 px selalu terlihat, urutan tab mengikuti urutan visual, dan shortcut F2 hanya menambah jalur—bukan menggantikan tombol.
-- Form memiliki label eksplisit, autocomplete login, error inline/announced, dan input pembayaran `inputmode="numeric"`.
+- Form memiliki label eksplisit, error inline/announced, dan input pembayaran `inputmode="numeric"` dengan ukuran teks aman dari auto-zoom.
 - Ikon memakai Lucide secara konsisten; ikon dekoratif diberi `aria-hidden`, tombol ikon memiliki accessible name.
 
 ## Anti-pattern yang dihindari
@@ -104,4 +108,4 @@ Warna fungsional selalu ditemani label. Teks normal ditargetkan minimal WCAG AA 
 - Dashboard abu-abu korporat generik, neon berlebihan, gradien AI ungu-pink, glass blur dekoratif, dan layar penuh KPI saat kasir bekerja.
 - Emoji sebagai ikon struktur.
 - Informasi yang hanya dibedakan warna.
-- Animasi panjang, hover-only, target kecil, atau success optimistis sebelum server mengonfirmasi penyimpanan.
+- Animasi panjang, hover-only, target kecil, atau success optimistis sebelum transaksi lokal benar-benar tersimpan.

@@ -7,7 +7,7 @@ Kasir Android offline untuk satu HP booth kreator/cosplay. Aplikasi dibangun den
 - Produk, kategori, varian, stok, dan event tersimpan lokal.
 - Checkout tunai dengan nominal cepat, input manual, dan kembalian.
 - Riwayat transaksi; pembatalan wajib menyimpan alasan dan mengembalikan stok.
-- Laporan terpisah per event.
+- Laporan terpisah per event, termasuk produk dan kategori terlaris dari transaksi yang tidak dibatalkan.
 - Ekspor dan restore backup JSON dengan validasi.
 - Font, ikon, dan alur utama tersedia tanpa internet.
 

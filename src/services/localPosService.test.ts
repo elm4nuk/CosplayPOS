@@ -108,6 +108,30 @@ describe('laporan, persistence, dan struk', () => {
     expect(await service.getEventReport(second.id)).toMatchObject({ revenue: 40000, transactionCount: 1, itemsSold: 1 })
   })
 
+  it('mengurutkan kategori dari transaksi selesai dan mengabaikan transaksi batal', async () => {
+    const { product, a5, eventId } = await seeded()
+    const charmCategory = await service.saveCategory({ name: 'Charm' })
+    const charm = await service.saveProduct({ name: 'Charm Bulan', categoryId: charmCategory.id, variants: [{ name: 'Ungu', price: 30000, stock: 4 }] })
+    const charmVariant = charm.variants[0]
+    await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }], cashReceived: 25000 })
+    await service.createTransaction({ eventId, items: [{ productId: charm.id, variantId: charmVariant.id, quantity: 2 }], cashReceived: 60000 })
+    const voided = await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 2 }], cashReceived: 50000 })
+    await service.voidTransaction(voided.id, 'Pesanan dibatalkan')
+
+    const report = await service.getEventReport(eventId)
+    expect(report).toMatchObject({ revenue: 85000, transactionCount: 2, itemsSold: 3, voidCount: 1 })
+    expect(report.topCategories).toEqual([
+      { categoryId: charmCategory.id, categoryName: 'Charm', quantity: 2, revenue: 60000 },
+      { categoryId: product.categoryId, categoryName: 'Print', quantity: 1, revenue: 25000 },
+    ])
+  })
+
+  it('mengembalikan daftar terlaris kosong bila event belum memiliki penjualan', async () => {
+    await service.ready()
+    const eventId = (await service.getBootstrap()).events[0].id
+    expect(await service.getEventReport(eventId)).toMatchObject({ transactionCount: 0, topProducts: [], topCategories: [] })
+  })
+
   it('produk, stok, transaksi, event, dan nomor urut bertahan setelah buka ulang', async () => {
     const { product, a5, eventId } = await seeded(); await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }], cashReceived: 25000 })
     service.close(); service = open(); expect(await service.ready()).toEqual({ firstRun: false }); expect(await stockOf(a5.id)).toBe(2)

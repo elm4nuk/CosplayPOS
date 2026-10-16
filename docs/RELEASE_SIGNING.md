@@ -17,7 +17,7 @@ Terakhir diperbarui: 2026-10-16 oleh Claude Code.
 
 Android mengizinkan update sebuah aplikasi **hanya** jika APK baru ditandatangani dengan kunci yang
 sama seperti yang sudah terpasang. Kalau kuncinya beda, satu-satunya jalan adalah uninstall — dan
-uninstall **menghapus IndexedDB**, yaitu seluruh data kasir: produk, stok, transaksi, PIN.
+uninstall **menghapus IndexedDB**, yaitu seluruh data kasir: produk, stok, event, transaksi, dan pengaturan booth.
 
 | Kejadian | Akibat |
 |---|---|
