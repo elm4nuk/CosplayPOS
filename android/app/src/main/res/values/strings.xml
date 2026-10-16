@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CosplayPOS</string>
+    <string name="title_activity_main">CosplayPOS</string>
+    <string name="package_name">com.cosplaypos.booth</string>
+    <string name="custom_url_scheme">com.cosplaypos.booth</string>
+</resources>
