@@ -220,3 +220,199 @@ h1, h2, h3, .brand-lockup { font-family: 'Fredoka', 'Nunito', sans-serif; }
   .action-row .button { flex: 1 1 auto; }
   .access-card { margin-top: -34px; }
 }
+
+/* Low Stock Alert styles */
+.low-stock-badge {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 3;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: .68rem;
+  font-weight: 900;
+  color: #8c4e00;
+  background: #fff0c7;
+  border: 1px solid #ffd577;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 5px rgba(120,70,0,.15);
+}
+.low-stock-text {
+  color: #b86200 !important;
+  font-weight: 800 !important;
+}
+.stock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-weight: 800;
+  font-size: .78rem;
+}
+.stock-pill.ok {
+  background: #f4efe9;
+  color: var(--ink);
+}
+.stock-pill.low {
+  background: var(--amber-soft);
+  color: #884d00;
+  border: 1px solid #ffd98a;
+}
+.stock-pill.out {
+  background: var(--red-soft);
+  color: #9e1f28;
+  border: 1px solid #f7c3c7;
+}
+.low-stock-banner {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #fed27b;
+  border-radius: var(--radius-md);
+  background: #fff8e8;
+  color: #8f5300;
+  font-size: .84rem;
+}
+.low-stock-banner svg {
+  flex-shrink: 0;
+  color: #c97100;
+}
+
+/* QRIS Payment styles */
+.payment-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 16px 20px 6px;
+}
+.payment-tab {
+  min-height: 48px;
+  border: 2px solid var(--line);
+  border-radius: 13px;
+  background: white;
+  color: var(--muted-ink);
+  font-weight: 800;
+  font-size: .92rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all .16s ease;
+}
+.payment-tab:hover {
+  border-color: #d1b8c6;
+  background: #fffafc;
+}
+.payment-tab.active {
+  border-color: var(--pink);
+  color: var(--pink-dark);
+  background: var(--pink-soft);
+  box-shadow: inset 0 -2px rgba(169,20,85,.1);
+}
+.qris-checkout-container {
+  padding-top: 4px;
+}
+.qris-checkout-display {
+  padding: 14px 20px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.qris-checkout-img {
+  max-width: 240px;
+  max-height: 240px;
+  width: auto;
+  height: auto;
+  border-radius: 16px;
+  border: 2px solid var(--line);
+  background: white;
+  padding: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.qris-checkout-caption {
+  margin: 14px 0 6px;
+  font-size: .88rem;
+  color: var(--ink);
+}
+.qris-missing-display {
+  margin: 14px 20px 8px;
+  padding: 22px 18px;
+  border: 2px dashed #e4d8d1;
+  border-radius: 16px;
+  background: #fffbf8;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.qris-missing-icon {
+  color: var(--muted-ink);
+  margin-bottom: 2px;
+}
+.qris-missing-title {
+  margin: 0;
+  font-weight: 800;
+  font-size: .95rem;
+  color: var(--ink);
+}
+.qris-missing-text {
+  color: var(--muted-ink);
+  font-size: .78rem;
+  line-height: 1.45;
+  max-width: 360px;
+}
+.qris-receipt-badge {
+  color: #8c4e00;
+  background: var(--amber-soft);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: .84rem;
+}
+.qris-settings-body {
+  padding: 16px;
+}
+.qris-preview-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #fffcf9;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.qris-preview-img {
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+  background: white;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.qris-preview-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qris-preview-info b {
+  font-size: .92rem;
+  color: var(--ink);
+}
+.qris-preview-info p {
+  margin: 0 0 6px;
+  font-size: .76rem;
+  color: var(--muted-ink);
+  line-height: 1.4;
+}
+.metric-grid--5 {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+

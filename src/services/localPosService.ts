@@ -5,7 +5,7 @@ import { formatReceiptText } from '../storage/receipt'
 import type { BootstrapData, Product, Transaction } from '../types'
 import type { PosService } from './posService'
 
-export type ShopSettings = { shopName: string; footer: string; receiptPrefix: string; defaultCashier: string }
+export type ShopSettings = { shopName: string; footer: string; receiptPrefix: string; defaultCashier: string; qrisImage?: string }
 export type ReadyState = { firstRun: boolean }
 
 export type CheckoutInput = {
@@ -13,6 +13,7 @@ export type CheckoutInput = {
   /** Only ids and quantities are trusted; price and name come from the database. */
   items: { productId: string; variantId: string; quantity: number }[]
   cashReceived: number
+  paymentMethod?: 'cash' | 'qris'
   /** One key per checkout attempt. Retrying with the same key never sells twice. */
   idempotencyKey?: string
 }
@@ -25,7 +26,6 @@ export type SaveProductInput = {
   accent?: string
   image?: string
   featured?: boolean
-  /** `stock` is only used for NEW variants. Existing stock changes go through adjustStock(). */
   variants?: { id?: string; name?: string; price: number; sku?: string; stock?: number }[]
   price?: number
   stock?: number
@@ -34,6 +34,8 @@ export type SaveProductInput = {
 export type EventReport = {
   eventId: string
   revenue: number
+  cashRevenue: number
+  qrisRevenue: number
   transactionCount: number
   itemsSold: number
   averageTicket: number
@@ -89,13 +91,13 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
   const toTransaction = (row: TransactionRow, stockOf: Map<string, number>): Transaction => ({
     id: row.id, number: row.number, eventId: row.eventId, createdAt: row.createdAt, cashierName: row.cashierName,
     items: row.items.map((item) => ({ productId: item.productId, productName: item.productName, variantId: item.variantId, variantName: item.variantName, price: item.price, quantity: item.quantity, stock: stockOf.get(item.variantId) ?? 0 })),
-    total: row.total, cashReceived: row.cashReceived, change: row.change, status: row.status, voidedAt: row.voidedAt, voidReason: row.voidReason,
+    total: row.total, cashReceived: row.cashReceived, change: row.change, paymentMethod: row.paymentMethod ?? 'cash', status: row.status, voidedAt: row.voidedAt, voidReason: row.voidReason,
   })
 
   const stockMap = (products: ProductRow[]) => new Map(products.flatMap((p) => p.variants.map((v) => [v.id, v.stock] as const)))
 
-  const checkoutSignature = (eventId: string, items: { variantId: string; quantity: number }[], cash: number) =>
-    `${eventId}|${cash}|${items.map((i) => `${i.variantId}:${i.quantity}`).sort().join(',')}`
+  const checkoutSignature = (eventId: string, items: { variantId: string; quantity: number }[], cash: number, method = 'cash') =>
+    `${eventId}|${method}|${cash}|${items.map((i) => `${i.variantId}:${i.quantity}`).sort().join(',')}`
 
   async function maybeAutoBackup(seq: number) {
     if (!options.autoBackup || seq % autoBackupEvery !== 0) return
@@ -137,7 +139,8 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
     async createTransaction(input: CheckoutInput): Promise<Transaction> {
       await ready()
       const actor = (await settings()).defaultCashier
-      const cash = rupiah(input.cashReceived, 'Uang diterima')
+      const isQris = input.paymentMethod === 'qris'
+      const cash = isQris ? 0 : rupiah(input.cashReceived, 'Uang diterima')
       const merged = new Map<string, { productId: string; variantId: string; quantity: number }>()
       for (const item of input.items) {
         if (!Number.isSafeInteger(item.quantity) || item.quantity < 1) fail('VALIDATION', 'Jumlah barang tidak valid.')
@@ -146,14 +149,14 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
       }
       const lines = [...merged.values()]
       if (!lines.length) fail('EMPTY_CART', 'Keranjang masih kosong.')
-      const signature = checkoutSignature(input.eventId, lines, cash)
+      const signature = checkoutSignature(input.eventId, lines, cash, isQris ? 'qris' : 'cash')
       const prefix = (await settings()).receiptPrefix
 
       const row = await db.transaction('rw', [db.meta, db.events, db.products, db.transactions, db.stockMovements], async () => {
         if (input.idempotencyKey) {
           const existing = await db.transactions.get(input.idempotencyKey)
           if (existing) {
-            if (checkoutSignature(existing.eventId, existing.items, existing.cashReceived) !== signature) fail('IDEMPOTENCY_CONFLICT', 'Kunci transaksi sudah dipakai untuk pesanan lain.')
+            if (checkoutSignature(existing.eventId, existing.items, existing.cashReceived, existing.paymentMethod ?? 'cash') !== signature) fail('IDEMPOTENCY_CONFLICT', 'Kunci transaksi sudah dipakai untuk pesanan lain.')
             return { tx: existing, replay: true }
           }
         }
@@ -175,7 +178,8 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         const valid = items as { product: ProductRow; variant: VariantRow; line: (typeof lines)[number] }[]
         const total = valid.reduce((sum, { variant, line }) => sum + variant.price * line.quantity, 0)
         if (!Number.isSafeInteger(total)) fail('VALIDATION', 'Total terlalu besar.')
-        if (cash < total) fail('INSUFFICIENT_CASH', 'Uang diterima masih kurang.', { total, cashReceived: cash })
+        const actualCash = isQris ? total : cash
+        if (!isQris && cash < total) fail('INSUFFICIENT_CASH', 'Uang diterima masih kurang.', { total, cashReceived: cash })
 
         const seq = (((await db.meta.get('txSeq'))?.value as number | undefined) ?? 0) + 1
         const id = input.idempotencyKey ?? uuid()
@@ -186,7 +190,7 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         const tx: TransactionRow = {
           id, seq, number: `${prefix}-${String(seq).padStart(4, '0')}`, eventId: input.eventId, createdAt: timestamp, cashierName: actor,
           items: valid.map(({ product, variant, line }) => ({ productId: product.id, productName: product.name, variantId: variant.id, variantName: variant.name, sku: variant.sku, price: variant.price, quantity: line.quantity })),
-          total, cashReceived: cash, change: cash - total, status: 'completed',
+          total, cashReceived: actualCash, change: actualCash - total, paymentMethod: isQris ? 'qris' : 'cash', status: 'completed',
         }
         await db.products.bulkPut([...products.values()].map((p) => ({ ...p, updatedAt: timestamp })))
         await db.stockMovements.bulkAdd(movements)
@@ -267,7 +271,7 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
       const name = text(input.name, 'Nama produk')
       const rawVariants = input.variants && input.variants.length > 0
         ? input.variants
-        : [{ name: 'Default', price: input.price ?? 0, stock: input.stock ?? 0 }]
+        : [{ name: 'Default', price: input.price ?? 0, stock: input.stock }]
       return db.transaction('rw', db.categories, db.products, db.stockMovements, async () => {
         if (!(await db.categories.get(input.categoryId))) fail('VALIDATION', 'Pilih kategori yang ada.')
         const existing = input.id ? await db.products.get(input.id) : undefined
@@ -275,15 +279,35 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         const timestamp = now().toISOString()
         const movements: StockMovementRow[] = []
         const productId = existing?.id ?? uuid()
-        const variants = rawVariants.map((v): VariantRow => {
-          const old = v.id ? existing?.variants.find((o) => o.id === v.id) : undefined
-          const row = { id: old?.id ?? uuid(), name: v.name?.trim() ? v.name.trim() : 'Default', price: rupiah(v.price, 'Harga'), sku: v.sku?.trim() ?? old?.sku ?? '', stock: old ? old.stock : (v.stock === undefined ? 0 : rupiah(v.stock, 'Stok awal')) }
-          if (!old && row.stock > 0) movements.push({ id: uuid(), kind: 'initial', productId, variantId: row.id, productName: name, variantName: row.name, delta: row.stock, stockAfter: row.stock, reason: 'Stok awal', actor, createdAt: timestamp })
-          return row
+        const variants = rawVariants.map((v, index): VariantRow => {
+          const old = v.id
+            ? existing?.variants.find((o) => o.id === v.id)
+            : (existing?.variants[index] ?? (existing?.variants.length === 1 ? existing.variants[0] : undefined))
+          const variantId = old?.id ?? v.id ?? uuid()
+          const variantName = v.name?.trim() ? v.name.trim() : (old?.name ?? 'Default')
+          const variantPrice = rupiah(v.price, 'Harga')
+          const variantSku = v.sku?.trim() ?? old?.sku ?? ''
+          let stock = old ? old.stock : 0
+          if (old) {
+            if (v.stock !== undefined) {
+              const newStock = rupiah(v.stock, 'Stok')
+              const delta = newStock - old.stock
+              if (delta !== 0) {
+                movements.push({ id: uuid(), kind: 'adjustment', productId, variantId, productName: name, variantName, delta, stockAfter: newStock, reason: 'Penyesuaian saat edit produk', actor, createdAt: timestamp })
+                stock = newStock
+              }
+            }
+          } else {
+            stock = v.stock === undefined ? 0 : rupiah(v.stock, 'Stok awal')
+            if (stock > 0) {
+              movements.push({ id: uuid(), kind: 'initial', productId, variantId, productName: name, variantName, delta: stock, stockAfter: stock, reason: 'Stok awal', actor, createdAt: timestamp })
+            }
+          }
+          return { id: variantId, name: variantName, price: variantPrice, sku: variantSku, stock }
         })
         const row: ProductRow = {
           id: productId, name, categoryId: input.categoryId, description: input.description?.trim() ?? existing?.description ?? '',
-          accent: input.accent ?? existing?.accent ?? '#ffd6e7', image: input.image !== undefined ? input.image : existing?.image,
+          accent: input.accent ?? existing?.accent ?? '#ffd6e7', image: input.image !== undefined ? (input.image || undefined) : existing?.image,
           featured: input.featured ?? existing?.featured ?? false, archived: false,
           variants, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp,
         }
@@ -336,8 +360,10 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         }
       }
       const revenue = done.reduce((sum, t) => sum + t.total, 0)
+      const cashRevenue = done.filter((t) => t.paymentMethod !== 'qris').reduce((sum, t) => sum + t.total, 0)
+      const qrisRevenue = done.filter((t) => t.paymentMethod === 'qris').reduce((sum, t) => sum + t.total, 0)
       return {
-        eventId, revenue, transactionCount: done.length, voidCount: all.length - done.length,
+        eventId, revenue, cashRevenue, qrisRevenue, transactionCount: done.length, voidCount: all.length - done.length,
         itemsSold: done.reduce((sum, t) => sum + t.items.reduce((n, i) => n + i.quantity, 0), 0),
         averageTicket: done.length ? Math.round(revenue / done.length) : 0,
         byHour: [...hours.values()].sort((a, b) => a.hour - b.hour),

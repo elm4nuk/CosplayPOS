@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  Archive, BadgeCheck, BarChart3, CalendarDays, Check, ChevronDown, CircleAlert,
+  AlertTriangle, Archive, BadgeCheck, Banknote, BarChart3, CalendarDays, Check, ChevronDown, CircleAlert,
   CircleDollarSign, Download, FileUp, History, ImagePlus, LayoutGrid,
-  Minus, Package, Plus, ReceiptText, Search, Settings, Share2,
+  Minus, Package, Pencil, Plus, QrCode, ReceiptText, Search, Settings, Share2,
   ShoppingBag, Sparkles, Tag, Trash2, Upload, WifiOff, X,
 } from 'lucide-react'
 import { backupFileName, saveToDevice, shareFile } from './platform/files'
@@ -33,6 +33,7 @@ function AppHeader({ event, events, change }: { event?: BoothEvent; events: Boot
 
 function ProductCard({ product, add }: { product: Product; add: (p: Product, id: string) => void }) {
   const stock = product.variants.reduce((s, v) => s + v.stock, 0)
+  const isLowStock = stock > 0 && stock <= 3
   const primary = product.variants[0]
   const hasMultiple = product.variants.length > 1
   return (
@@ -45,30 +46,45 @@ function ProductCard({ product, add }: { product: Product; add: (p: Product, id:
         )}
         {product.featured && <span className="popular-badge">Sering laku</span>}
         {stock === 0 && <span className="sold-badge">Habis</span>}
+        {isLowStock && (
+          <span className="low-stock-badge">
+            <AlertTriangle size={12} /> Sisa {stock}
+          </span>
+        )}
       </div>
       <div className="product-content">
         <p className="product-name">{product.name}</p>
         <p className="product-description">{product.description}</p>
         {hasMultiple ? (
           <div className="variant-list">
-            {product.variants.map((v) => (
-              <button
-                key={v.id}
-                disabled={!v.stock}
-                onClick={() => add(product, v.id)}
-                aria-label={`Tambah ${product.name}, varian ${v.name}, ${formatRupiah(v.price)}, stok ${v.stock}`}
-              >
-                <span>{v.name}<small>{v.stock ? `Stok ${v.stock}` : 'Habis'}</small></span>
-                <b>{formatRupiah(v.price)}</b>
-                <Plus size={17} />
-              </button>
-            ))}
+            {product.variants.map((v) => {
+              const vLow = v.stock > 0 && v.stock <= 3
+              return (
+                <button
+                  key={v.id}
+                  disabled={!v.stock}
+                  onClick={() => add(product, v.id)}
+                  aria-label={`Tambah ${product.name}, varian ${v.name}, ${formatRupiah(v.price)}, stok ${v.stock}`}
+                >
+                  <span>
+                    {v.name}
+                    <small className={vLow ? 'low-stock-text' : ''}>
+                      {v.stock === 0 ? 'Habis' : vLow ? `Sisa ${v.stock}!` : `Stok ${v.stock}`}
+                    </small>
+                  </span>
+                  <b>{formatRupiah(v.price)}</b>
+                  <Plus size={17} />
+                </button>
+              )
+            })}
           </div>
         ) : primary ? (
           <div className="product-single-row">
             <div className="product-meta-block">
               <span className="product-single-price">{formatRupiah(primary.price)}</span>
-              <small className="product-single-stock">{primary.stock ? `Stok ${primary.stock}` : 'Habis'}</small>
+              <small className={`product-single-stock ${isLowStock ? 'low-stock-text' : ''}`}>
+                {primary.stock === 0 ? 'Habis' : isLowStock ? `Sisa ${primary.stock} (Menipis)` : `Stok ${primary.stock}`}
+              </small>
             </div>
             <button
               className="button primary small product-single-btn"
@@ -174,7 +190,198 @@ function PosScreen({ data, cart, add, quantity, checkout, mobile, setMobile }: {
 }
 
 function Modal({ title, children, close, wide }: { title: string; children: ReactNode; close?: () => void; wide?: boolean }) { return <div className="modal-layer" onMouseDown={(e) => e.target === e.currentTarget && close?.()}><section className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-head"><h2 id="modal-title">{title}</h2>{close && <button className="icon-button" onClick={close} aria-label="Tutup"><X /></button>}</div>{children}</section></div> }
-function CheckoutModal({ service, cart, eventId, success, close }: { service: LocalPosService; cart: CartItem[]; eventId: string; success: (t: Transaction) => void; close: () => void }) { const total = cart.reduce((s, x) => s + x.price * x.quantity, 0); const [cash, setCash] = useState(0); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const key = useRef(crypto.randomUUID()); const shortage = Math.max(0, total - cash); const change = Math.max(0, cash - total); const pay = async () => { if (busy || shortage) return; setBusy(true); setError(''); try { success(await service.createTransaction({ eventId, items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })), cashReceived: cash, idempotencyKey: key.current })) } catch (e) { setError(messageOf(e)); if (!isPosError(e, 'IDEMPOTENCY_CONFLICT')) key.current = crypto.randomUUID() } finally { setBusy(false) } }; return <Modal title="Pembayaran tunai" close={busy ? undefined : close}><div className="checkout-total"><span>Total tagihan</span><strong>{formatRupiah(total)}</strong><small>{cart.reduce((s, x) => s + x.quantity, 0)} barang</small></div>{error && <Alert>{error}</Alert>}<div className="payment-section"><label htmlFor="cash">Uang diterima</label><div className="money-input"><span>Rp</span><input id="cash" inputMode="numeric" autoFocus value={formatCashInput(cash)} onChange={(e) => setCash(Number(e.target.value.replace(/\D/g, '')))} /></div></div><div className="quick-cash">{quickCash(total).map((n) => <button key={n} className={cash === n ? 'active' : ''} onClick={() => setCash(n)}>{n === total ? <><Check size={17} />Uang pas</> : formatRupiah(n)}</button>)}</div><div className={`change-box ${shortage ? 'shortage' : ''}`} aria-live="polite"><span>{!cash ? 'Masukkan uang diterima' : shortage ? 'Masih kurang' : 'Kembalian'}</span><strong>{!cash ? '—' : formatRupiah(shortage || change)}</strong></div><div className="modal-actions"><button className="button secondary" onClick={close} disabled={busy}>Kembali</button><button className="button primary grow" onClick={pay} disabled={busy || !!shortage || !cash}>{busy ? <><span className="spinner" />Menyimpan…</> : <><BadgeCheck size={20} />Simpan pembayaran</>}</button></div></Modal> }
+function CheckoutModal({
+  service,
+  cart,
+  eventId,
+  settings,
+  success,
+  close,
+}: {
+  service: LocalPosService
+  cart: CartItem[]
+  eventId: string
+  settings?: ShopSettings
+  success: (t: Transaction) => void
+  close: () => void
+}) {
+  const total = cart.reduce((s, x) => s + x.price * x.quantity, 0)
+  const [method, setMethod] = useState<'cash' | 'qris'>('cash')
+  const [cash, setCash] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const key = useRef(crypto.randomUUID())
+  const shortage = Math.max(0, total - cash)
+  const change = Math.max(0, cash - total)
+
+  const payCash = async () => {
+    if (busy || shortage) return
+    setBusy(true)
+    setError('')
+    try {
+      success(
+        await service.createTransaction({
+          eventId,
+          items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })),
+          cashReceived: cash,
+          paymentMethod: 'cash',
+          idempotencyKey: key.current,
+        })
+      )
+    } catch (e) {
+      setError(messageOf(e))
+      if (!isPosError(e, 'IDEMPOTENCY_CONFLICT')) key.current = crypto.randomUUID()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const payQris = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      success(
+        await service.createTransaction({
+          eventId,
+          items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })),
+          cashReceived: total,
+          paymentMethod: 'qris',
+          idempotencyKey: key.current,
+        })
+      )
+    } catch (e) {
+      setError(messageOf(e))
+      if (!isPosError(e, 'IDEMPOTENCY_CONFLICT')) key.current = crypto.randomUUID()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={method === 'cash' ? 'Pembayaran Tunai' : 'Pembayaran QRIS'} close={busy ? undefined : close}>
+      <div className="checkout-total">
+        <span>Total tagihan</span>
+        <strong>{formatRupiah(total)}</strong>
+        <small>{cart.reduce((s, x) => s + x.quantity, 0)} barang</small>
+      </div>
+      <div className="payment-tabs" role="tablist" aria-label="Metode pembayaran">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={method === 'cash'}
+          className={`payment-tab ${method === 'cash' ? 'active' : ''}`}
+          onClick={() => setMethod('cash')}
+        >
+          <Banknote size={18} />
+          <span>Tunai</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={method === 'qris'}
+          className={`payment-tab ${method === 'qris' ? 'active' : ''}`}
+          onClick={() => setMethod('qris')}
+        >
+          <QrCode size={18} />
+          <span>QRIS</span>
+        </button>
+      </div>
+      {error && <Alert>{error}</Alert>}
+      {method === 'cash' ? (
+        <>
+          <div className="payment-section">
+            <label htmlFor="cash">Uang diterima</label>
+            <div className="money-input">
+              <span>Rp</span>
+              <input
+                id="cash"
+                inputMode="numeric"
+                autoFocus
+                value={formatCashInput(cash)}
+                onChange={(e) => setCash(Number(e.target.value.replace(/\D/g, '')))}
+              />
+            </div>
+          </div>
+          <div className="quick-cash">
+            {quickCash(total).map((n) => (
+              <button key={n} className={cash === n ? 'active' : ''} onClick={() => setCash(n)}>
+                {n === total ? (
+                  <>
+                    <Check size={17} />
+                    Uang pas
+                  </>
+                ) : (
+                  formatRupiah(n)
+                )}
+              </button>
+            ))}
+          </div>
+          <div className={`change-box ${shortage ? 'shortage' : ''}`} aria-live="polite">
+            <span>{!cash ? 'Masukkan uang diterima' : shortage ? 'Masih kurang' : 'Kembalian'}</span>
+            <strong>{!cash ? '—' : formatRupiah(shortage || change)}</strong>
+          </div>
+          <div className="modal-actions">
+            <button className="button secondary" onClick={close} disabled={busy}>
+              Kembali
+            </button>
+            <button className="button primary grow" onClick={payCash} disabled={busy || !!shortage || !cash}>
+              {busy ? (
+                <>
+                  <span className="spinner" />
+                  Menyimpan…
+                </>
+              ) : (
+                <>
+                  <BadgeCheck size={20} />
+                  Simpan pembayaran
+                </>
+              )}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="qris-checkout-container">
+          {settings?.qrisImage ? (
+            <div className="qris-checkout-display">
+              <img src={settings.qrisImage} alt="QRIS booth" className="qris-checkout-img" />
+              <p className="qris-checkout-caption">
+                Scan kode QRIS di atas untuk membayar <b>{formatRupiah(total)}</b>
+              </p>
+            </div>
+          ) : (
+            <div className="qris-missing-display">
+              <QrCode size={48} className="qris-missing-icon" />
+              <p className="qris-missing-title">Foto QRIS belum diunggah</p>
+              <small className="qris-missing-text">
+                Anda dapat mengunggah foto QRIS di menu <b>Pengaturan</b> agar langsung tampil saat checkout.
+                Bila pembeli sudah scan QRIS fisik booth, tekan tombol di bawah untuk konfirmasi.
+              </small>
+            </div>
+          )}
+          <div className="modal-actions">
+            <button className="button secondary" onClick={close} disabled={busy}>
+              Kembali
+            </button>
+            <button className="button primary grow" onClick={payQris} disabled={busy}>
+              {busy ? (
+                <>
+                  <span className="spinner" />
+                  Menyimpan…
+                </>
+              ) : (
+                <>
+                  <BadgeCheck size={20} />
+                  Konfirmasi Pembayaran QRIS
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
 function ReceiptModal({ service, transaction, shop, close }: { service: LocalPosService; transaction: Transaction; shop: ShopSettings; close: () => void }) {
   const share = async () => shareFile(`${transaction.number}.txt`, await service.getReceiptText(transaction.id), 'text/plain')
   return (
@@ -205,8 +412,14 @@ function ReceiptModal({ service, transaction, shop, close }: { service: LocalPos
         </div>
         <div className="receipt-totals">
           <div><span>Total</span><b>{formatRupiah(transaction.total)}</b></div>
-          <div><span>Tunai</span><b>{formatRupiah(transaction.cashReceived)}</b></div>
-          <div className="change"><span>Kembalian</span><strong>{formatRupiah(transaction.change)}</strong></div>
+          {transaction.paymentMethod === 'qris' ? (
+            <div><span>Metode</span><b className="qris-receipt-badge">QRIS (Lunas)</b></div>
+          ) : (
+            <>
+              <div><span>Tunai</span><b>{formatRupiah(transaction.cashReceived)}</b></div>
+              <div className="change"><span>Kembalian</span><strong>{formatRupiah(transaction.change)}</strong></div>
+            </>
+          )}
         </div>
       </div>
       <div className="modal-actions">
@@ -228,6 +441,7 @@ function ConfirmDialog({ title, impact, confirmLabel, close, confirm }: { title:
 }
 function ProductsPage({ data, service, refresh }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void> }) {
   const [kind, setKind] = useState<'product' | 'category' | null>(null)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [pending, setPending] = useState<{ type: 'category' | 'product'; id: string; name: string } | null>(null)
   const [error, setError] = useState('')
   const [photo, setPhoto] = useState<string>('')
@@ -248,18 +462,34 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
     }
   }
 
+  const startEditProduct = (p: Product) => {
+    setEditingProduct(p)
+    setPhoto(p.image || '')
+    setError('')
+    setKind('product')
+  }
+
   const submitProduct = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); const f = new FormData(e.currentTarget)
     try {
       await service.saveProduct({
+        id: editingProduct ? editingProduct.id : undefined,
         name: String(f.get('name')),
         categoryId: String(f.get('category')),
         description: String(f.get('description')),
-        accent: '#b8e5ff',
-        image: photo || undefined,
-        variants: [{ name: 'Default', price: Number(f.get('price')), stock: Number(f.get('stock')) }],
+        accent: editingProduct?.accent ?? '#b8e5ff',
+        image: photo || '',
+        price: Number(f.get('price')),
+        stock: Number(f.get('stock')),
+        variants: [{
+          id: editingProduct?.variants[0]?.id,
+          name: editingProduct?.variants[0]?.name ?? 'Default',
+          price: Number(f.get('price')),
+          stock: Number(f.get('stock')),
+        }],
       })
       setPhoto('')
+      setEditingProduct(null)
       setKind(null)
       await refresh()
     } catch (x) {
@@ -276,43 +506,59 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   }
   return (
     <section className="admin-page">
-      <PageTitle eyebrow="Katalog lokal" title="Produk & kategori" action={<div className="action-row"><button className="button secondary" onClick={() => setKind('category')}><Plus />Kategori</button><button className="button primary" onClick={() => { setPhoto(''); setKind('product') }}><Plus />Produk baru</button></div>} />
+      <PageTitle eyebrow="Katalog lokal" title="Produk & kategori" action={<div className="action-row"><button className="button secondary" onClick={() => setKind('category')}><Plus />Kategori</button><button className="button primary" onClick={() => { setEditingProduct(null); setPhoto(''); setKind('product') }}><Plus />Produk baru</button></div>} />
       <div className="category-manager">{data.categories.filter((x) => x.id !== 'all').map((c) => <span key={c.id}>{c.name}<button aria-label={`Hapus kategori ${c.name}`} onClick={() => setPending({ type: 'category', id: c.id, name: c.name })}><X size={15} /></button></span>)}</div>
       {error && <Alert>{error}</Alert>}
       <div className="table-card">
         <table>
           <thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th>Aksi</th></tr></thead>
           <tbody>
-            {data.products.map((p) => (
-              <tr key={p.id}>
-                <td>
-                  <div className="table-product">
-                    {p.image ? (
-                      <img src={p.image} alt={p.name} className="table-thumb" />
-                    ) : (
-                      <span style={{ background: p.accent }}><Sparkles size={18} /></span>
-                    )}
-                    <div>
-                      <b>{p.name}</b>
-                      {p.description && <small className="block">{p.description}</small>}
+            {data.products.map((p) => {
+              const totalStock = p.variants.reduce((s, v) => s + v.stock, 0)
+              return (
+                <tr key={p.id}>
+                  <td>
+                    <div className="table-product">
+                      {p.image ? (
+                        <img src={p.image} alt={p.name} className="table-thumb" />
+                      ) : (
+                        <span style={{ background: p.accent }}><Sparkles size={18} /></span>
+                      )}
+                      <div>
+                        <b>{p.name}</b>
+                        {p.description && <small className="block">{p.description}</small>}
+                      </div>
                     </div>
-                  </div>
-                </td>
-                <td>{data.categories.find((c) => c.id === p.categoryId)?.name}</td>
-                <td>{formatRupiah(Math.min(...p.variants.map((v) => v.price)))}</td>
-                <td>{p.variants.reduce((s, v) => s + v.stock, 0)}</td>
-                <td>
-                  <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
-                    <Trash2 size={16} />Hapus
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td>{data.categories.find((c) => c.id === p.categoryId)?.name}</td>
+                  <td>{formatRupiah(Math.min(...p.variants.map((v) => v.price)))}</td>
+                  <td>
+                    {totalStock === 0 ? (
+                      <span className="stock-pill out">Habis</span>
+                    ) : totalStock <= 3 ? (
+                      <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {totalStock}</span>
+                    ) : (
+                      <span className="stock-pill ok">{totalStock}</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="action-row">
+                      <button className="button secondary small" onClick={() => startEditProduct(p)} aria-label={`Edit ${p.name}`}>
+                        <Pencil size={15} />Edit
+                      </button>
+                      <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
+                        <Trash2 size={16} />Hapus
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
       {kind === 'product' && (
-        <SimpleForm title="Produk baru" close={() => { setKind(null); setPhoto('') }} submit={submitProduct}>
+        <SimpleForm title={editingProduct ? `Edit ${editingProduct.name}` : 'Produk baru'} close={() => { setKind(null); setPhoto(''); setEditingProduct(null) }} submit={submitProduct}>
           <div className="photo-upload-container">
             <span className="photo-upload-label">Foto produk</span>
             {photo ? (
@@ -337,12 +583,12 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
               </label>
             )}
           </div>
-          <label>Nama produk<input name="name" autoFocus required placeholder="Contoh: Acrylic Keychain" /></label>
-          <label>Kategori<select name="category" required>{data.categories.filter((x) => x.id !== 'all').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label>Deskripsi<input name="description" placeholder="Contoh: Art paper 260 gsm, laminasi doff" /></label>
+          <label>Nama produk<input name="name" autoFocus defaultValue={editingProduct?.name ?? ''} required placeholder="Contoh: Acrylic Keychain" /></label>
+          <label>Kategori<select name="category" defaultValue={editingProduct?.categoryId ?? data.categories.filter((x) => x.id !== 'all')[0]?.id} required>{data.categories.filter((x) => x.id !== 'all').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>Deskripsi<input name="description" defaultValue={editingProduct?.description ?? ''} placeholder="Contoh: Art paper 260 gsm, laminasi doff" /></label>
           <div className="form-grid form-grid-2">
-            <label>Harga (Rp)<input name="price" type="number" min="0" placeholder="25000" required /></label>
-            <label>Stok awal<input name="stock" type="number" min="0" placeholder="10" required /></label>
+            <label>Harga (Rp)<input name="price" type="number" min="0" defaultValue={editingProduct?.variants[0]?.price ?? ''} placeholder="25000" required /></label>
+            <label>{editingProduct ? 'Jumlah stok' : 'Stok awal'}<input name="stock" type="number" min="0" defaultValue={editingProduct ? editingProduct.variants.reduce((s, v) => s + v.stock, 0) : ''} placeholder="10" required /></label>
           </div>
         </SimpleForm>
       )}
@@ -355,6 +601,7 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
   const [variant, setVariant] = useState<{ product: Product; id: string } | null>(null)
   const [error, setError] = useState('')
   const variants = data.products.flatMap((p) => p.variants.map((v) => ({ ...v, product: p })))
+  const lowStockCount = variants.filter((v) => v.stock > 0 && v.stock <= 3).length
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); if (!variant) return
     const f = new FormData(e.currentTarget)
@@ -369,6 +616,12 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
   return (
     <section className="admin-page">
       <PageTitle eyebrow="Inventori" title="Stok booth" />
+      {lowStockCount > 0 && (
+        <div className="low-stock-banner" role="status">
+          <AlertTriangle size={19} />
+          <span><b>Peringatan Stok Menipis:</b> Ada {lowStockCount} varian dagangan dengan sisa stok ≤ 3. Segera restock!</span>
+        </div>
+      )}
       {error && <Alert>{error}</Alert>}
       <div className="stock-grid">
         <div className="table-card">
@@ -391,7 +644,15 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
                     </div>
                   </td>
                   <td><code>{v.sku || '—'}</code></td>
-                  <td className="number-cell">{v.stock}</td>
+                  <td className="number-cell">
+                    {v.stock === 0 ? (
+                      <span className="stock-pill out">Habis</span>
+                    ) : v.stock <= 3 ? (
+                      <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {v.stock}</span>
+                    ) : (
+                      <span className="stock-pill ok">{v.stock}</span>
+                    )}
+                  </td>
                   <td><button className="button secondary small" onClick={() => setVariant({ product: v.product, id: v.id })}>Sesuaikan</button></td>
                 </tr>
               ))}
@@ -423,20 +684,292 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
   )
 }
 function EventsPage({ data, service, refresh, select }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; select: (id: string) => void }) { const [open, setOpen] = useState(false); const submit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); const event = await service.saveEvent({ name: String(f.get('name')), venue: String(f.get('venue')), dateLabel: String(f.get('date')) }); await service.setActiveEvent(event.id); setOpen(false); select(event.id); await refresh() }; return <section className="admin-page"><PageTitle eyebrow="Periode penjualan" title="Pengelolaan event" action={<button className="button primary" onClick={() => setOpen(true)}><Plus />Event baru</button>} /><div className="event-grid">{data.events.map((x) => <article className={`event-card ${x.active ? 'active' : ''}`} key={x.id}><CalendarDays /><h2>{x.name}</h2><p>{x.venue || 'Lokasi belum diisi'} · {x.dateLabel}</p><div>{x.active ? <StatusPill tone="success">Sedang aktif</StatusPill> : <button className="button secondary small" onClick={async () => { await service.setActiveEvent(x.id); select(x.id); await refresh() }}>Aktifkan</button>}</div></article>)}</div>{open && <SimpleForm title="Event baru" close={() => setOpen(false)} submit={submit}><label>Nama event<input name="name" autoFocus required /></label><label>Lokasi<input name="venue" /></label><label>Tanggal / label<input name="date" placeholder="16 Okt 2026" required /></label></SimpleForm>}</section> }
-function ReportsPage({ data, service, eventId }: { data: BootstrapData; service: LocalPosService; eventId: string }) { const [report, setReport] = useState<EventReport | null>(null); useEffect(() => { if (eventId) service.getEventReport(eventId).then(setReport) }, [service, eventId, data.transactions]); if (!report) return <section className="admin-page"><Empty title="Menyiapkan laporan" text="Menghitung dari transaksi tersimpan…" /></section>; const event = data.events.find((x) => x.id === eventId); return <section className="admin-page"><PageTitle eyebrow={event?.name ?? 'Event'} title="Laporan event" /><div className="metric-grid"><Metric icon={<CircleDollarSign />} label="Omzet" value={formatRupiah(report.revenue)} hint={`${report.transactionCount} transaksi tersimpan`} /><Metric icon={<ReceiptText />} label="Rata-rata" value={formatRupiah(report.averageTicket)} hint={`${report.voidCount} transaksi batal`} /><Metric icon={<Package />} label="Barang terjual" value={String(report.itemsSold)} hint="Tidak termasuk transaksi batal" /></div><div className="report-grid"><article className="chart-card"><div className="card-heading"><h2>Penjualan per jam</h2></div><div className="bar-chart">{report.byHour.map((x) => <div className="bar-wrap" key={x.hour}><span className="bar" style={{ height: `${report.revenue ? Math.max(5, x.revenue / report.revenue * 100) : 5}%` }} /><small>{x.hour}</small></div>)}</div></article><article className="ranking-card"><div className="card-heading"><h2>Produk terlaris</h2></div>{report.topProducts.map((x, i) => <div className="rank-row" key={x.productId}><span>{i + 1}</span><div><b>{x.productName}</b><small>{formatRupiah(x.revenue)}</small></div><strong>{x.quantity}</strong></div>)}</article></div></section> }
+function ReportsPage({ data, service, eventId }: { data: BootstrapData; service: LocalPosService; eventId: string }) {
+  const [report, setReport] = useState<EventReport | null>(null)
+  useEffect(() => { if (eventId) service.getEventReport(eventId).then(setReport) }, [service, eventId, data.transactions])
+  if (!report) return <section className="admin-page"><Empty title="Menyiapkan laporan" text="Menghitung dari transaksi tersimpan…" /></section>
+  const event = data.events.find((x) => x.id === eventId)
+  return (
+    <section className="admin-page">
+      <PageTitle eyebrow={event?.name ?? 'Event'} title="Laporan event" />
+      <div className="metric-grid metric-grid--5">
+        <Metric icon={<CircleDollarSign />} label="Total Omzet" value={formatRupiah(report.revenue)} hint={`${report.transactionCount} transaksi tersimpan`} />
+        <Metric icon={<Banknote />} label="Omzet Tunai" value={formatRupiah(report.cashRevenue ?? 0)} hint="Pembayaran fisik kasir" />
+        <Metric icon={<QrCode />} label="Omzet QRIS" value={formatRupiah(report.qrisRevenue ?? 0)} hint="Pembayaran nontunai QRIS" />
+        <Metric icon={<ReceiptText />} label="Rata-rata Nota" value={formatRupiah(report.averageTicket)} hint={`${report.voidCount} transaksi batal`} />
+        <Metric icon={<Package />} label="Barang Terjual" value={String(report.itemsSold)} hint="Item berhasil terjual" />
+      </div>
+      <div className="report-grid">
+        <article className="chart-card">
+          <div className="card-heading"><h2>Penjualan per jam</h2></div>
+          <div className="bar-chart">
+            {report.byHour.map((x) => (
+              <div className="bar-wrap" key={x.hour}>
+                <span className="bar" style={{ height: `${report.revenue ? Math.max(5, (x.revenue / report.revenue) * 100) : 5}%` }} />
+                <small>{x.hour}</small>
+              </div>
+            ))}
+          </div>
+        </article>
+        <article className="ranking-card">
+          <div className="card-heading"><h2>Produk terlaris</h2></div>
+          {report.topProducts.map((x, i) => (
+            <div className="rank-row" key={x.productId}>
+              <span>{i + 1}</span>
+              <div><b>{x.productName}</b><small>{formatRupiah(x.revenue)}</small></div>
+              <strong>{x.quantity}</strong>
+            </div>
+          ))}
+        </article>
+      </div>
+    </section>
+  )
+}
 function Metric({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint: string }) { return <article className="metric-card"><span>{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{hint}</small></div></article> }
 function MoreMenu({ navigate }: { navigate: (screen: Screen) => void }) { return <section className="admin-page mobile-more"><PageTitle eyebrow="Menu lainnya" title="Kelola booth" /><div className="more-grid">{NAV.slice(3).map(({ id, label, icon: Icon }) => <button key={id} onClick={() => navigate(id)}><Icon size={23} /><span>{label}</span></button>)}</div></section> }
 function TransactionsPage({ data, service, refresh, receipt }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; receipt: (t: Transaction) => void }) {
   const [target, setTarget] = useState<Transaction | null>(null); const [error, setError] = useState('')
   const submit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); if (!target) return; const f = new FormData(e.currentTarget); try { await service.voidTransaction(target.id, String(f.get('reason'))); setTarget(null); await refresh() } catch (x) { setError(messageOf(x)) } }
-  return <section className="admin-page"><PageTitle eyebrow="Jejak penjualan" title="Riwayat transaksi" />{error && <Alert>{error}</Alert>}<div className="table-card"><table><thead><tr><th>Nomor</th><th>Waktu</th><th>Kasir</th><th>Total</th><th>Status</th><th>Aksi</th></tr></thead><tbody>{data.transactions.map((t) => <tr key={t.id}><td><b>{t.number}</b>{t.voidReason && <small className="block void-reason">Alasan: {t.voidReason}</small>}</td><td>{new Date(t.createdAt).toLocaleString('id-ID')}</td><td>{t.cashierName}</td><td>{formatRupiah(t.total)}</td><td><StatusPill tone={t.status === 'void' ? 'danger' : 'success'}>{t.status === 'void' ? 'Batal' : 'Selesai'}</StatusPill></td><td><div className="action-row"><button className="button ghost small" onClick={() => receipt(t)}><ReceiptText size={17} />Struk</button>{t.status !== 'void' && <button className="button danger small" onClick={() => setTarget(t)}>Batalkan</button>}</div></td></tr>)}</tbody></table></div>{target && <SimpleForm title={`Batalkan ${target.number}?`} danger close={() => setTarget(null)} submit={submit}><div className="confirm-impact"><CircleAlert size={24} aria-hidden="true" /><div><b>Transaksi akan dibatalkan</b><p>Stok seluruh item dikembalikan. Transaksi tetap ada di riwayat dengan alasan pembatalan dan tidak dihitung sebagai omzet.</p></div></div><label>Alasan pembatalan<input name="reason" autoFocus required minLength={3} placeholder="Contoh: salah pilih varian" /></label></SimpleForm>}</section>
+  return (
+    <section className="admin-page">
+      <PageTitle eyebrow="Jejak penjualan" title="Riwayat transaksi" />
+      {error && <Alert>{error}</Alert>}
+      <div className="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Nomor</th>
+              <th>Waktu</th>
+              <th>Metode</th>
+              <th>Kasir</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.transactions.map((t) => (
+              <tr key={t.id}>
+                <td>
+                  <b>{t.number}</b>
+                  {t.voidReason && <small className="block void-reason">Alasan: {t.voidReason}</small>}
+                </td>
+                <td>{new Date(t.createdAt).toLocaleString('id-ID')}</td>
+                <td>
+                  <StatusPill tone={t.paymentMethod === 'qris' ? 'warning' : 'neutral'}>
+                    {t.paymentMethod === 'qris' ? 'QRIS' : 'Tunai'}
+                  </StatusPill>
+                </td>
+                <td>{t.cashierName}</td>
+                <td>{formatRupiah(t.total)}</td>
+                <td><StatusPill tone={t.status === 'void' ? 'danger' : 'success'}>{t.status === 'void' ? 'Batal' : 'Selesai'}</StatusPill></td>
+                <td>
+                  <div className="action-row">
+                    <button className="button ghost small" onClick={() => receipt(t)}><ReceiptText size={17} />Struk</button>
+                    {t.status !== 'void' && <button className="button danger small" onClick={() => setTarget(t)}>Batalkan</button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {target && (
+        <SimpleForm title={`Batalkan ${target.number}?`} danger close={() => setTarget(null)} submit={submit}>
+          <div className="confirm-impact">
+            <CircleAlert size={24} aria-hidden="true" />
+            <div>
+              <b>Transaksi akan dibatalkan</b>
+              <p>Stok seluruh item dikembalikan. Transaksi tetap ada di riwayat dengan alasan pembatalan dan tidak dihitung sebagai omzet.</p>
+            </div>
+          </div>
+          <label>Alasan pembatalan<input name="reason" autoFocus required minLength={3} placeholder="Contoh: salah pilih varian" /></label>
+        </SimpleForm>
+      )}
+    </section>
+  )
 }
 function SettingsPage({ service, settings, setSettings }: { service: LocalPosService; settings: ShopSettings; setSettings: (s: ShopSettings) => void }) {
-  const [notice, setNotice] = useState(''); const [error, setError] = useState(''); const [restore, setRestore] = useState(false)
-  const save = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); try { const next = await service.saveSettings({ shopName: String(f.get('shop')), defaultCashier: String(f.get('cashier')), footer: String(f.get('footer')), receiptPrefix: String(f.get('prefix')) }); setSettings(next); setNotice('Pengaturan disimpan di perangkat.'); setError('') } catch (x) { setError(messageOf(x)) } }
-  const backup = async () => { try { const content = JSON.stringify(await service.exportBackup(), null, 2); const result = await saveToDevice(backupFileName(), content); setNotice(result.saved ? `Backup disimpan: ${result.location}` : 'Penyimpanan dibatalkan.'); setError('') } catch (x) { setError(messageOf(x)) } }
-  const doRestore = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const file = new FormData(e.currentTarget).get('file'); try { if (!(file instanceof File) || !file.size) throw new Error('Pilih file backup JSON.'); await service.restoreBackup(await file.text()); setRestore(false); window.location.reload() } catch (x) { setError(messageOf(x)) } }
-  return <section className="admin-page"><PageTitle eyebrow="Preferensi booth" title="Pengaturan" />{notice && <Alert tone="success">{notice}</Alert>}{error && <Alert>{error}</Alert>}<div className="settings-grid"><form className="settings-card stack-form" onSubmit={save}><div className="card-heading"><div><h2>Identitas booth</h2><p>Tampil di aplikasi dan struk</p></div><Sparkles /></div><label>Nama booth<input name="shop" defaultValue={settings.shopName} required /></label><label>Nama kasir bawaan<input name="cashier" defaultValue={settings.defaultCashier} required /></label><label>Pesan struk<input name="footer" defaultValue={settings.footer} required /></label><label>Prefix struk<input name="prefix" defaultValue={settings.receiptPrefix} required /></label><button className="button primary" type="submit">Simpan pengaturan</button></form><article className="settings-card"><div className="card-heading"><div><h2>Backup lokal</h2><p>Simpan di luar penyimpanan aplikasi</p></div><Download /></div><p>Ekspor backup secara rutin ke Dokumen agar data tetap bisa dipulihkan bila aplikasi dihapus atau HP bermasalah.</p><div className="action-row"><button className="button primary" onClick={backup}><Download size={18} />Ekspor backup</button><button className="button secondary" onClick={() => setRestore(true)}><FileUp size={18} />Restore</button></div></article><article className="settings-card"><div className="card-heading"><div><h2>Mode offline</h2><p>Tidak ada server yang diperlukan</p></div><WifiOff /></div><p>Produk, event, transaksi, stok, dan laporan disimpan langsung di HP ini.</p></article></div>{restore && <SimpleForm title="Restore backup?" danger close={() => setRestore(false)} submit={doRestore}><div className="confirm-impact"><CircleAlert size={24} aria-hidden="true" /><div><b>Seluruh data aktif akan diganti</b><p>Produk, stok, event, transaksi, dan pengaturan saat ini akan ditimpa oleh isi file. Ekspor backup sekarang terlebih dahulu bila data lama masih dibutuhkan.</p></div></div><label>File backup JSON<input name="file" type="file" accept="application/json,.json" required autoFocus /></label></SimpleForm>}</section>
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [restore, setRestore] = useState(false)
+  const [qrisPhoto, setQrisPhoto] = useState(settings.qrisImage || '')
+
+  useEffect(() => {
+    setQrisPhoto(settings.qrisImage || '')
+  }, [settings.qrisImage])
+
+  const save = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const f = new FormData(e.currentTarget)
+    try {
+      const next = await service.saveSettings({
+        shopName: String(f.get('shop')),
+        defaultCashier: String(f.get('cashier')),
+        footer: String(f.get('footer')),
+        receiptPrefix: String(f.get('prefix')),
+      })
+      setSettings(next)
+      setNotice('Pengaturan disimpan di perangkat.')
+      setError('')
+    } catch (x) {
+      setError(messageOf(x))
+    }
+  }
+
+  const handleQrisSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setError('File QRIS harus berupa gambar (JPG, PNG, WebP).')
+      return
+    }
+    try {
+      const optimized = await optimizeImageFile(file, 800)
+      setQrisPhoto(optimized)
+      const next = await service.saveSettings({ qrisImage: optimized })
+      setSettings(next)
+      setNotice('Foto QRIS berhasil disimpan di perangkat.')
+      setError('')
+    } catch {
+      setError('Gagal membaca gambar QRIS. Coba gambar lain.')
+    }
+  }
+
+  const removeQris = async () => {
+    try {
+      setQrisPhoto('')
+      const next = await service.saveSettings({ qrisImage: '' })
+      setSettings(next)
+      setNotice('Foto QRIS dihapus.')
+      setError('')
+    } catch (x) {
+      setError(messageOf(x))
+    }
+  }
+
+  const backup = async () => {
+    try {
+      const content = JSON.stringify(await service.exportBackup(), null, 2)
+      const result = await saveToDevice(backupFileName(), content)
+      setNotice(result.saved ? `Backup disimpan: ${result.location}` : 'Penyimpanan dibatalkan.')
+      setError('')
+    } catch (x) {
+      setError(messageOf(x))
+    }
+  }
+
+  const doRestore = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const file = new FormData(e.currentTarget).get('file')
+    try {
+      if (!(file instanceof File) || !file.size) throw new Error('Pilih file backup JSON.')
+      await service.restoreBackup(await file.text())
+      setRestore(false)
+      window.location.reload()
+    } catch (x) {
+      setError(messageOf(x))
+    }
+  }
+
+  return (
+    <section className="admin-page">
+      <PageTitle eyebrow="Preferensi booth" title="Pengaturan" />
+      {notice && <Alert tone="success">{notice}</Alert>}
+      {error && <Alert>{error}</Alert>}
+      <div className="settings-grid">
+        <form className="settings-card stack-form" onSubmit={save}>
+          <div className="card-heading">
+            <div>
+              <h2>Identitas booth</h2>
+              <p>Tampil di aplikasi dan struk</p>
+            </div>
+            <Sparkles />
+          </div>
+          <label>Nama booth<input name="shop" defaultValue={settings.shopName} required /></label>
+          <label>Nama kasir bawaan<input name="cashier" defaultValue={settings.defaultCashier} required /></label>
+          <label>Pesan struk<input name="footer" defaultValue={settings.footer} required /></label>
+          <label>Prefix struk<input name="prefix" defaultValue={settings.receiptPrefix} required /></label>
+          <button className="button primary" type="submit">Simpan pengaturan</button>
+        </form>
+
+        <article className="settings-card">
+          <div className="card-heading">
+            <div>
+              <h2>Kode QRIS Booth</h2>
+              <p>Tampil ke pembeli saat checkout QRIS</p>
+            </div>
+            <QrCode />
+          </div>
+          <div className="qris-settings-body">
+            {qrisPhoto ? (
+              <div className="qris-preview-card">
+                <img src={qrisPhoto} alt="QRIS booth" className="qris-preview-img" />
+                <div className="qris-preview-info">
+                  <b>QRIS Booth Aktif</b>
+                  <p>Kode QRIS siap ditampilkan ke pembeli saat memilih metode pembayaran QRIS.</p>
+                  <div className="action-row">
+                    <label className="button secondary small change-photo-btn">
+                      <Upload size={15} /> Ganti foto
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleQrisSelect} />
+                    </label>
+                    <button type="button" className="button ghost small button-danger-ghost" onClick={removeQris}>
+                      <Trash2 size={15} /> Hapus
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <label className="photo-dropzone">
+                <QrCode size={36} />
+                <span>Unggah foto kode QRIS booth</span>
+                <small>Foto atau barcode QRIS (GoPay, OVO, Dana, BCA, dll). Maks. 5MB.</small>
+                <input type="file" accept="image/*" className="sr-only" onChange={handleQrisSelect} />
+              </label>
+            )}
+          </div>
+        </article>
+
+        <article className="settings-card">
+          <div className="card-heading">
+            <div>
+              <h2>Backup lokal</h2>
+              <p>Simpan di luar penyimpanan aplikasi</p>
+            </div>
+            <Download />
+          </div>
+          <p>Ekspor backup secara rutin ke Dokumen agar data tetap bisa dipulihkan bila aplikasi dihapus atau HP bermasalah.</p>
+          <div className="action-row">
+            <button className="button primary" onClick={backup}><Download size={18} />Ekspor backup</button>
+            <button className="button secondary" onClick={() => setRestore(true)}><FileUp size={18} />Restore</button>
+          </div>
+        </article>
+
+        <article className="settings-card">
+          <div className="card-heading">
+            <div>
+              <h2>Mode offline</h2>
+              <p>Tidak ada server yang diperlukan</p>
+            </div>
+            <WifiOff />
+          </div>
+          <p>Produk, event, transaksi, stok, dan laporan disimpan langsung di HP ini.</p>
+        </article>
+      </div>
+      {restore && (
+        <SimpleForm title="Restore backup?" danger close={() => setRestore(false)} submit={doRestore}>
+          <div className="confirm-impact">
+            <CircleAlert size={24} aria-hidden="true" />
+            <div>
+              <b>Seluruh data aktif akan diganti</b>
+              <p>Produk, stok, event, transaksi, dan pengaturan saat ini akan ditimpa oleh isi file. Ekspor backup sekarang terlebih dahulu bila data lama masih dibutuhkan.</p>
+            </div>
+          </div>
+          <label>File backup JSON<input name="file" type="file" accept="application/json,.json" required autoFocus /></label>
+        </SimpleForm>
+      )}
+    </section>
+  )
 }
 
 export default function App({ service = posService }: { service?: LocalPosService }) {
@@ -453,5 +986,5 @@ export default function App({ service = posService }: { service?: LocalPosServic
   const quantity = (id: string, n: number) => setCart((old) => n <= 0 ? old.filter((x) => x.variantId !== id) : old.map((x) => x.variantId === id ? { ...x, quantity: Math.min(n, x.stock) } : x))
   const done = async (t: Transaction) => { await refresh(); setCart([]); setCheckout(false); setMobile(false); setReceipt(t) }
   const navigate = (s: Screen) => { setScreen(s); setMobile(false); scrollTo({ top: 0, behavior: 'smooth' }) }
-  return <div className="app-shell"><a className="skip-link" href="#main-content">Lewati ke konten utama</a><Sidebar screen={screen} setScreen={navigate} cashierName={settings.defaultCashier} shopName={settings.shopName} /><main className="workspace"><AppHeader events={data.events} event={data.events.find((x) => x.id === eventId)} change={selectEvent} />{screen === 'pos' && <PosScreen data={data} cart={cart} add={add} quantity={quantity} checkout={() => setCheckout(true)} mobile={mobile} setMobile={setMobile} />}{screen === 'products' && <ProductsPage data={data} service={service} refresh={refresh} />}{screen === 'stock' && <StockPage data={data} service={service} refresh={refresh} />}{screen === 'events' && <EventsPage data={data} service={service} refresh={refresh} select={setEventId} />}{screen === 'reports' && <ReportsPage data={data} service={service} eventId={eventId} />}{screen === 'transactions' && <TransactionsPage data={data} service={service} refresh={refresh} receipt={setReceipt} />}{screen === 'settings' && <><MoreMenu navigate={navigate} /><SettingsPage service={service} settings={settings} setSettings={setSettings} /></>}</main><MobileNav screen={screen} setScreen={navigate} cartCount={cart.reduce((s, x) => s + x.quantity, 0)} openCart={() => setMobile(true)} />{checkout && <CheckoutModal service={service} cart={cart} eventId={eventId} success={done} close={() => setCheckout(false)} />}{receipt && <ReceiptModal service={service} transaction={receipt} shop={settings} close={() => { setReceipt(null); setScreen('pos') }} />}</div>
+  return <div className="app-shell"><a className="skip-link" href="#main-content">Lewati ke konten utama</a><Sidebar screen={screen} setScreen={navigate} cashierName={settings.defaultCashier} shopName={settings.shopName} /><main className="workspace"><AppHeader events={data.events} event={data.events.find((x) => x.id === eventId)} change={selectEvent} />{screen === 'pos' && <PosScreen data={data} cart={cart} add={add} quantity={quantity} checkout={() => setCheckout(true)} mobile={mobile} setMobile={setMobile} />}{screen === 'products' && <ProductsPage data={data} service={service} refresh={refresh} />}{screen === 'stock' && <StockPage data={data} service={service} refresh={refresh} />}{screen === 'events' && <EventsPage data={data} service={service} refresh={refresh} select={setEventId} />}{screen === 'reports' && <ReportsPage data={data} service={service} eventId={eventId} />}{screen === 'transactions' && <TransactionsPage data={data} service={service} refresh={refresh} receipt={setReceipt} />}{screen === 'settings' && <><MoreMenu navigate={navigate} /><SettingsPage service={service} settings={settings} setSettings={setSettings} /></>}</main><MobileNav screen={screen} setScreen={navigate} cartCount={cart.reduce((s, x) => s + x.quantity, 0)} openCart={() => setMobile(true)} />{checkout && <CheckoutModal service={service} cart={cart} eventId={eventId} settings={settings} success={done} close={() => setCheckout(false)} />}{receipt && <ReceiptModal service={service} transaction={receipt} shop={settings} close={() => { setReceipt(null); setScreen('pos') }} />}</div>
 }

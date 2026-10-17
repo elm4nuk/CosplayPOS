@@ -128,6 +128,66 @@ describe('laporan, persistence, dan struk', () => {
     const receipt = await service.getReceiptText(tx.id)
     expect(receipt).toContain('Booth Bintang'); expect(receipt.split('\n').every((line) => line.length <= RECEIPT_COLUMNS)).toBe(true)
   })
+
+  it('mendukung pembayaran QRIS dan memisahkan omzet tunai vs QRIS di laporan', async () => {
+    const { product, a5, eventId } = await seeded()
+    // Transaksi 1: Tunai Rp 25.000
+    const txCash = await service.createTransaction({
+      eventId,
+      items: [{ productId: product.id, variantId: a5.id, quantity: 1 }],
+      cashReceived: 30000,
+      paymentMethod: 'cash',
+    })
+    expect(txCash.paymentMethod).toBe('cash')
+    expect(txCash.change).toBe(5000)
+
+    // Transaksi 2: QRIS Rp 25.000
+    const txQris = await service.createTransaction({
+      eventId,
+      items: [{ productId: product.id, variantId: a5.id, quantity: 1 }],
+      cashReceived: 0,
+      paymentMethod: 'qris',
+    })
+    expect(txQris.paymentMethod).toBe('qris')
+    expect(txQris.cashReceived).toBe(25000)
+    expect(txQris.change).toBe(0)
+
+    // Periksa struk QRIS
+    const qrisReceipt = await service.getReceiptText(txQris.id)
+    expect(qrisReceipt).toContain('QRIS')
+
+    // Periksa pemisahan omzet di laporan
+    const report = await service.getEventReport(eventId)
+    expect(report.revenue).toBe(50000)
+    expect(report.cashRevenue).toBe(25000)
+    expect(report.qrisRevenue).toBe(25000)
+    expect(report.transactionCount).toBe(2)
+  })
+
+  it('mendukung edit produk dan mencatat riwayat penyesuaian stok saat diedit', async () => {
+    const { product, a5 } = await seeded()
+    // Edit produk: ubah nama, harga, dan stok dari 3 menjadi 10
+    const updated = await service.saveProduct({
+      id: product.id,
+      name: 'Poster Art Exclusive (Updated)',
+      categoryId: product.categoryId,
+      description: 'Laminasi glossy premium',
+      image: 'data:image/webp;base64,mockupdated',
+      price: 35000,
+      stock: 10,
+    })
+
+    expect(updated.name).toBe('Poster Art Exclusive (Updated)')
+    expect(updated.image).toBe('data:image/webp;base64,mockupdated')
+    expect(updated.variants[0].price).toBe(35000)
+    expect(updated.variants[0].stock).toBe(10)
+
+    // Cek bahwa penyesuaian stok (+7) tercatat di stockAdjustments
+    const bootstrap = await service.getBootstrap()
+    const adjustment = bootstrap.stockAdjustments.find((m) => m.delta === 7)
+    expect(adjustment).toBeDefined()
+    expect(adjustment?.reason).toContain('edit produk')
+  })
 })
 
 describe('backup tanpa kredensial', () => {

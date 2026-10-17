@@ -39,6 +39,8 @@ export type CartItem = {
   stock: number
 }
 
+export type PaymentMethod = 'cash' | 'qris'
+
 export type Transaction = {
   id: string
   number: string
@@ -49,6 +51,7 @@ export type Transaction = {
   total: number
   cashReceived: number
   change: number
+  paymentMethod?: PaymentMethod
   status: 'completed' | 'void'
   voidedAt?: string
   voidReason?: string

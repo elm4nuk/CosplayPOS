@@ -122,4 +122,74 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
 
     await waitFor(() => expect(screen.queryByText('Poster Keren')).not.toBeInTheDocument())
   })
+
+  it('menampilkan indikator stok menipis pada kartu kasir dan tabel produk', async () => {
+    const next = await prepared(false)
+    const category = await next.saveCategory({ name: 'Keychains' })
+    await next.saveProduct({ name: 'Gantungan Kunci Fox', categoryId: category.id, price: 20000, stock: 2 })
+    await openTill(next)
+
+    // Di kasir, produk dengan stok 2 harus menampilkan indikator stok menipis
+    expect(screen.getAllByText(/sisa 2/i).length).toBeGreaterThanOrEqual(1)
+
+    // Buka menu produk
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+    expect(screen.getAllByText(/sisa 2/i).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('dapat mengedit produk (nama, harga, stok) dan perubahan tampil di katalog', async () => {
+    const next = await prepared(false)
+    const category = await next.saveCategory({ name: 'Badge' })
+    await next.saveProduct({ name: 'Pin Button A', categoryId: category.id, price: 10000, stock: 5 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+    expect(screen.getByText('Pin Button A')).toBeInTheDocument()
+
+    // Klik tombol Edit
+    await user.click(screen.getByRole('button', { name: /edit pin button a/i }))
+    expect(await screen.findByRole('heading', { name: /edit pin button a/i })).toBeInTheDocument()
+
+    // Ubah nama, harga, stok
+    const nameInput = screen.getByLabelText(/nama produk/i)
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Pin Button A Special Edition')
+
+    const priceInput = screen.getByLabelText(/harga/i)
+    await user.clear(priceInput)
+    await user.type(priceInput, '15000')
+
+    const stockInput = screen.getByLabelText(/jumlah stok/i)
+    await user.clear(stockInput)
+    await user.type(stockInput, '12')
+
+    await user.click(screen.getByRole('button', { name: /^simpan$/i }))
+
+    await waitFor(() => expect(screen.getByText('Pin Button A Special Edition')).toBeInTheDocument())
+    expect(screen.getByText('Rp 15.000')).toBeInTheDocument()
+    expect(screen.getByText('12')).toBeInTheDocument()
+  })
+
+  it('dapat checkout menggunakan metode QRIS dan struk mencantumkan QRIS', async () => {
+    const next = await prepared(false)
+    const category = await next.saveCategory({ name: 'Art' })
+    await next.saveProduct({ name: 'Artbook Vol 1', categoryId: category.id, price: 75000, stock: 4 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: /tambah artbook vol 1/i }))
+    await user.click(screen.getByRole('button', { name: /bayar sekarang/i }))
+
+    // Pilih tab QRIS
+    await user.click(screen.getByRole('tab', { name: /qris/i }))
+    expect(screen.getByRole('button', { name: /konfirmasi pembayaran qris/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /konfirmasi pembayaran qris/i }))
+    expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
+    expect(screen.getByText(/qris \(lunas\)/i)).toBeInTheDocument()
+  })
 })

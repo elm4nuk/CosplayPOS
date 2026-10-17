@@ -54,6 +54,7 @@ export type TransactionRow = {
   total: number
   cashReceived: number
   change: number
+  paymentMethod?: 'cash' | 'qris'
   status: 'completed' | 'void'
   voidedAt?: string
   voidReason?: string

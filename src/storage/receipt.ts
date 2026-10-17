@@ -45,7 +45,12 @@ export function formatReceiptText(tx: Transaction, settings: ReceiptSettings, wi
     lines.push(...wrap(hasVariant ? `${item.productName} (${item.variantName})` : item.productName, width))
     lines.push(row(`  ${item.quantity} x ${money(item.price)}`, money(item.price * item.quantity), width))
   }
-  lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width), row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
+  lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width))
+  if (tx.paymentMethod === 'qris') {
+    lines.push(row('Metode', 'QRIS (Lunas)', width))
+  } else {
+    lines.push(row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
+  }
   if (tx.status === 'void') lines.push(rule, center('*** DIBATALKAN ***', width))
   if (settings.footer) lines.push(rule, ...settings.footer.split('\n').flatMap((line) => wrap(line, width).map((part) => center(part, width))))
   return lines.join('\n') + '\n'
