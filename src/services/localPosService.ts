@@ -292,6 +292,14 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         return toProduct(row)
       })
     },
+    async deleteProduct(id: string) {
+      await ready()
+      return db.transaction('rw', db.products, async () => {
+        const product = await db.products.get(id)
+        if (!product) fail('NOT_FOUND', 'Produk tidak ditemukan.')
+        await db.products.delete(id)
+      })
+    },
     async archiveProduct(id: string) {
       await ready()
       const updated = await db.products.update(id, { archived: true, updatedAt: now().toISOString() })

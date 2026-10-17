@@ -272,7 +272,7 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   }
   const confirmPending = async () => {
     if (!pending) return
-    try { if (pending.type === 'category') await service.deleteCategory(pending.id); else await service.archiveProduct(pending.id); setPending(null); await refresh() } catch (x) { setPending(null); setError(messageOf(x)) }
+    try { if (pending.type === 'category') await service.deleteCategory(pending.id); else await service.deleteProduct(pending.id); setPending(null); await refresh() } catch (x) { setPending(null); setError(messageOf(x)) }
   }
   return (
     <section className="admin-page">
@@ -301,7 +301,11 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
                 <td>{data.categories.find((c) => c.id === p.categoryId)?.name}</td>
                 <td>{formatRupiah(Math.min(...p.variants.map((v) => v.price)))}</td>
                 <td>{p.variants.reduce((s, v) => s + v.stock, 0)}</td>
-                <td><button className="button ghost small" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })}><Archive size={17} />Arsipkan</button></td>
+                <td>
+                  <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
+                    <Trash2 size={16} />Hapus
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -343,7 +347,7 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
         </SimpleForm>
       )}
       {kind === 'category' && <SimpleForm title="Kategori baru" close={() => setKind(null)} submit={submitCategory}><label>Nama kategori<input name="name" autoFocus required /></label></SimpleForm>}
-      {pending && <ConfirmDialog title={pending.type === 'category' ? `Hapus kategori ${pending.name}?` : `Arsipkan ${pending.name}?`} impact={pending.type === 'category' ? 'Kategori akan dihapus permanen. Kategori yang masih dipakai produk aktif tidak dapat dihapus.' : 'Produk tidak lagi muncul di kasir, tetapi transaksi lama dan catatan stok tetap tersimpan.'} confirmLabel={pending.type === 'category' ? 'Hapus kategori' : 'Arsipkan produk'} close={() => setPending(null)} confirm={confirmPending} />}
+      {pending && <ConfirmDialog title={pending.type === 'category' ? `Hapus kategori ${pending.name}?` : `Hapus produk ${pending.name}?`} impact={pending.type === 'category' ? 'Kategori akan dihapus permanen. Kategori yang masih dipakai produk aktif tidak dapat dihapus.' : 'Produk akan dihapus dari katalog dan inventori. Catatan transaksi lama tetap aman tersimpan.'} confirmLabel={pending.type === 'category' ? 'Hapus kategori' : 'Hapus produk'} close={() => setPending(null)} confirm={confirmPending} />}
     </section>
   )
 }

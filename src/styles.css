@@ -171,6 +171,8 @@ h1, h2, h3, .brand-lockup { font-family: 'Fredoka', 'Nunito', sans-serif; }
 .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .button.danger { color: white; background: var(--red); border-color: var(--red); box-shadow: 0 3px 0 #841c23; }
 .button.danger:hover:not(:disabled) { background: #ad242b; }
+.button.button-danger-ghost { color: var(--red); background: transparent; border-color: transparent; }
+.button.button-danger-ghost:hover:not(:disabled) { background: var(--red-soft); color: #9b202a; border-color: #f1bdc1; }
 .alert.success { color: #075e51; background: var(--mint-soft); border: 1px solid #a6e2d5; }
 .confirm-impact { margin: 20px 20px 4px; padding: 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid #f1bdc1; border-radius: 14px; color: #7f1d26; background: var(--red-soft); }
 .confirm-impact svg { flex: 0 0 auto; margin-top: 1px; }

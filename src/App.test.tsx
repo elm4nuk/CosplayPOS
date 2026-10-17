@@ -103,4 +103,23 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByText('Stiker Hologram')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /tambah stiker hologram/i })).toBeInTheDocument()
   })
+
+  it('dapat menghapus produk dan menghilangkannya dari daftar serta kasir', async () => {
+    const next = await prepared(false)
+    const category = await next.saveCategory({ name: 'Prints' })
+    await next.saveProduct({ name: 'Poster Keren', categoryId: category.id, price: 50000, stock: 5 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+    expect(screen.getByText('Poster Keren')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /hapus poster keren/i }))
+    expect(await screen.findByRole('dialog', { name: /hapus produk poster keren\?/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^hapus produk$/i }))
+
+    await waitFor(() => expect(screen.queryByText('Poster Keren')).not.toBeInTheDocument())
+  })
 })

@@ -57,6 +57,14 @@ describe('akses langsung tanpa autentikasi', () => {
     await service.ready()
     expect(await service.saveSettings({ receiptPrefix: 'BTG', defaultCashier: 'Kasir Demo' })).toMatchObject({ receiptPrefix: 'BTG', defaultCashier: 'Kasir Demo' })
   })
+
+  it('deleteProduct menghapus produk dari database dan katalog', async () => {
+    const { product } = await seeded()
+    expect((await service.getBootstrap()).products.some((p) => p.id === product.id)).toBe(true)
+    await service.deleteProduct(product.id)
+    expect((await service.getBootstrap()).products.some((p) => p.id === product.id)).toBe(false)
+    expect(await service.db.products.get(product.id)).toBeUndefined()
+  })
 })
 
 describe('checkout dan stok atomik', () => {
