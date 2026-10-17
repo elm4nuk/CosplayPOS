@@ -388,5 +388,28 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByText('Produk Terlaris Lintas Event')).toBeInTheDocument()
     expect(screen.getByText('Tabel Evaluasi Komparasi Seluruh Event')).toBeInTheDocument()
   })
+
+  it('dapat menghapus event dari menu Pengelolaan Event', async () => {
+    const next = await prepared(false)
+    await next.saveEvent({ name: 'ChibiCon 2026', venue: 'Balai Kartini', dateLabel: '20 Des 2026' })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^event$/i })[0])
+    expect(await screen.findByRole('heading', { name: /pengelolaan event/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'ChibiCon 2026' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /hapus event chibicon 2026/i }))
+
+    expect(await screen.findByRole('dialog', { name: /hapus event chibicon 2026\?/i })).toBeInTheDocument()
+    expect(screen.getByText(/seluruh data transaksi/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /hapus event$/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /hapus event chibicon 2026\?/i })).not.toBeInTheDocument()
+    })
+    expect(screen.queryByRole('heading', { name: 'ChibiCon 2026' })).not.toBeInTheDocument()
+  })
 })
 

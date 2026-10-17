@@ -370,6 +370,29 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         await db.meta.put({ key: 'activeEventId', value: id })
       })
     },
+    async deleteEvent(id: string) {
+      await ready()
+      return db.transaction('rw', [db.meta, db.events, db.transactions], async () => {
+        const existing = await db.events.get(id)
+        if (!existing) fail('NOT_FOUND', 'Event tidak ditemukan.')
+        const count = await db.events.count()
+        if (count <= 1) {
+          fail('VALIDATION', 'Event tidak dapat dihapus karena harus ada minimal 1 event tersisa.')
+        }
+        let nextActiveId: string | undefined
+        const currentActive = (await db.meta.get('activeEventId'))?.value as string | undefined
+        if (currentActive === id) {
+          const other = await db.events.where('id').notEqual(id).first()
+          if (other) {
+            nextActiveId = other.id
+            await db.meta.put({ key: 'activeEventId', value: other.id })
+          }
+        }
+        await db.transactions.where('eventId').equals(id).delete()
+        await db.events.delete(id)
+        return nextActiveId
+      })
+    },
 
     async getEventReport(eventId: string): Promise<EventReport> {
       await ready()

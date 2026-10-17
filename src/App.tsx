@@ -1618,7 +1618,123 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
     </section>
   )
 }
-function EventsPage({ data, service, refresh, select }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; select: (id: string) => void }) { const [open, setOpen] = useState(false); const submit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); const event = await service.saveEvent({ name: String(f.get('name')), venue: String(f.get('venue')), dateLabel: String(f.get('date')) }); await service.setActiveEvent(event.id); setOpen(false); select(event.id); await refresh() }; return <section className="admin-page"><PageTitle eyebrow="Periode penjualan" title="Pengelolaan event" action={<button className="button primary" onClick={() => setOpen(true)}><Plus />Event baru</button>} /><div className="event-grid">{data.events.map((x) => <article className={`event-card ${x.active ? 'active' : ''}`} key={x.id}><CalendarDays /><h2>{x.name}</h2><p>{x.venue || 'Lokasi belum diisi'} · {x.dateLabel}</p><div>{x.active ? <StatusPill tone="success">Sedang aktif</StatusPill> : <button className="button secondary small" onClick={async () => { await service.setActiveEvent(x.id); select(x.id); await refresh() }}>Aktifkan</button>}</div></article>)}</div>{open && <SimpleForm title="Event baru" close={() => setOpen(false)} submit={submit}><label>Nama event<input name="name" autoFocus required /></label><label>Lokasi<input name="venue" /></label><label>Tanggal / label<input name="date" placeholder="16 Okt 2026" required /></label></SimpleForm>}</section> }
+function EventsPage({ data, service, refresh, select }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; select: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<BoothEvent | null>(null)
+  const [error, setError] = useState('')
+
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const f = new FormData(e.currentTarget)
+    try {
+      const event = await service.saveEvent({
+        name: String(f.get('name')),
+        venue: String(f.get('venue')),
+        dateLabel: String(f.get('date')),
+      })
+      await service.setActiveEvent(event.id)
+      setOpen(false)
+      select(event.id)
+      await refresh()
+    } catch (err) {
+      setError(messageOf(err))
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    try {
+      const nextActiveId = await service.deleteEvent(pendingDelete.id)
+      if (nextActiveId) {
+        select(nextActiveId)
+      } else {
+        const remaining = data.events.filter((e) => e.id !== pendingDelete.id)
+        if (remaining[0]) select(remaining[0].id)
+      }
+      setPendingDelete(null)
+      await refresh()
+    } catch (err) {
+      setError(messageOf(err))
+    }
+  }
+
+  return (
+    <section className="admin-page">
+      <PageTitle
+        eyebrow="Periode penjualan"
+        title="Pengelolaan event"
+        action={
+          <button className="button primary" onClick={() => setOpen(true)}>
+            <Plus />Event baru
+          </button>
+        }
+      />
+      {error && <Alert>{error}</Alert>}
+      <div className="event-grid">
+        {data.events.map((x) => {
+          const isOnlyEvent = data.events.length <= 1
+          const txCount = data.transactions.filter((t) => t.eventId === x.id).length
+          return (
+            <article className={`event-card ${x.active ? 'active' : ''}`} key={x.id}>
+              <div className="event-card-head">
+                <CalendarDays size={24} className="event-card-icon" />
+                {x.active && <StatusPill tone="success">Sedang aktif</StatusPill>}
+              </div>
+              <h2>{x.name}</h2>
+              <p>{x.venue || 'Lokasi belum diisi'} · {x.dateLabel}</p>
+              <div className="event-card-footer">
+                <div className="event-card-status">
+                  {!x.active && (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={async () => {
+                        await service.setActiveEvent(x.id)
+                        select(x.id)
+                        await refresh()
+                      }}
+                    >
+                      Aktifkan
+                    </button>
+                  )}
+                </div>
+                <div className="event-card-actions">
+                  <button
+                    type="button"
+                    className="button ghost small button-danger-ghost"
+                    disabled={isOnlyEvent}
+                    onClick={() => setPendingDelete(x)}
+                    aria-label={`Hapus event ${x.name}`}
+                    title={isOnlyEvent ? 'Minimal harus ada 1 event tersisa' : `Hapus event ${x.name}`}
+                  >
+                    <Trash2 size={16} />
+                    <span>Hapus</span>
+                  </button>
+                </div>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+      {open && (
+        <SimpleForm title="Event baru" close={() => setOpen(false)} submit={submit}>
+          <label>Nama event<input name="name" autoFocus required /></label>
+          <label>Lokasi<input name="venue" placeholder="Contoh: ICE BSD Hall 10" /></label>
+          <label>Tanggal / label<input name="date" placeholder="Contoh: 16-17 Okt 2026" required /></label>
+        </SimpleForm>
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Hapus event ${pendingDelete.name}?`}
+          impact={`Seluruh data transaksi (${data.transactions.filter((t) => t.eventId === pendingDelete.id).length} transaksi) dan laporan penjualan pada event ${pendingDelete.name} akan dihapus secara permanen. Stok produk barang tidak akan terpengaruh.`}
+          confirmLabel="Hapus event"
+          close={() => setPendingDelete(null)}
+          confirm={confirmDelete}
+        />
+      )}
+    </section>
+  )
+}
 function ReportsPage({ data, service, eventId }: { data: BootstrapData; service: LocalPosService; eventId: string }) {
   const [tab, setTab] = useState<'single' | 'comparison'>('single')
   const [report, setReport] = useState<EventReport | null>(null)

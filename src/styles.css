@@ -1246,3 +1246,29 @@ h1, h2, h3, .brand-lockup { font-family: 'Fredoka', 'Nunito', sans-serif; }
     grid-template-columns: 1fr !important;
   }
 }
+
+.event-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.event-card-icon {
+  color: var(--pink);
+}
+.event-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.event-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+

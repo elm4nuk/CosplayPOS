@@ -274,6 +274,39 @@ describe('laporan, persistence, dan struk', () => {
     expect(comparison.summary.bestRevenueEvent?.id).toBe(ev1)
     expect(comparison.summary.bestRevenueEvent?.revenue).toBe(50000)
   })
+
+  it('dapat menghapus event beserta transaksinya dan beralih ke event lain bila yang aktif dihapus', async () => {
+    const { product, a5, eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'Comifuro 19', venue: 'ICE BSD', dateLabel: '10 Nov 2026' })
+    await service.setActiveEvent(ev2.id)
+
+    // Transaksi di ev2
+    await service.createTransaction({
+      eventId: ev2.id,
+      items: [{ productId: product.id, variantId: a5.id, quantity: 1 }],
+      cashReceived: 25000,
+    })
+    expect((await service.getBootstrap()).transactions.some((t) => t.eventId === ev2.id)).toBe(true)
+
+    // Hapus ev2 yang sedang aktif
+    const nextActive = await service.deleteEvent(ev2.id)
+    expect(nextActive).toBe(ev1)
+
+    const bootstrap = await service.getBootstrap()
+    expect(bootstrap.events).toHaveLength(1)
+    expect(bootstrap.events[0].id).toBe(ev1)
+    expect(bootstrap.events[0].active).toBe(true)
+    // Transaksi di ev2 sudah bersih
+    expect(bootstrap.transactions.some((t) => t.eventId === ev2.id)).toBe(false)
+  })
+
+  it('menolak penghapusan event terakhir dan event tidak ditemukan', async () => {
+    const { eventId } = await seeded()
+    // Event terakhir
+    await expect(service.deleteEvent(eventId)).rejects.toMatchObject({ code: 'VALIDATION' })
+    // Event tidak ditemukan
+    await expect(service.deleteEvent('non-existent-id')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
 })
 
 describe('backup tanpa kredensial', () => {
