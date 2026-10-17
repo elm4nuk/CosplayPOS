@@ -164,19 +164,50 @@ function PosScreen({ data, cart, add, quantity, checkout, mobile, setMobile }: {
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Cari produk…" />
           </label>
         </div>
-        <div className="category-row">
-          {data.categories.map((x) => (
-            <button key={x.id} className={category === x.id ? 'active' : ''} onClick={() => setCategory(x.id)}>
-              {x.name}
-            </button>
-          ))}
+        <div className="category-row" role="tablist" aria-label="Filter kategori dagangan">
+          {data.categories.map((x) => {
+            const count = x.id === 'all'
+              ? data.products.length
+              : data.products.filter((p) => p.categoryId === x.id).length
+            return (
+              <button
+                key={x.id}
+                type="button"
+                role="tab"
+                aria-selected={category === x.id}
+                className={category === x.id ? 'active' : ''}
+                onClick={() => setCategory(x.id)}
+              >
+                <span>{x.name}</span>
+                <span className="category-pill-count">{count}</span>
+              </button>
+            )
+          })}
         </div>
         {products.length ? (
           <div className="product-grid">
             {products.map((p) => <ProductCard key={p.id} product={p} add={add} />)}
           </div>
         ) : (
-          <Empty title="Belum ada produk" text="Tambahkan produk dari menu Produk." />
+          <Empty
+            title={category !== 'all' || query ? 'Produk tidak ditemukan' : 'Belum ada produk'}
+            text={
+              category !== 'all' || query
+                ? `Tidak ada produk di kategori "${data.categories.find((c) => c.id === category)?.name || category}"${query ? ` dengan kata kunci "${query}"` : ''}.`
+                : 'Tambahkan produk dari menu Produk.'
+            }
+            action={
+              (category !== 'all' || query) && (
+                <button
+                  type="button"
+                  className="button secondary small"
+                  onClick={() => { setCategory('all'); setQuery('') }}
+                >
+                  Tampilkan semua produk
+                </button>
+              )
+            }
+          />
         )}
       </section>
       <CartPanel cart={cart} quantity={quantity} checkout={checkout} />
@@ -431,7 +462,7 @@ function ReceiptModal({ service, transaction, shop, close }: { service: LocalPos
 }
 
 function PageTitle({ eyebrow, title, action }: { eyebrow: string; title: string; action?: ReactNode }) { return <div className="page-title"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div>{action}</div> }
-function Empty({ title, text }: { title: string; text: string }) { return <div className="empty-state page-empty"><Sparkles /><h3>{title}</h3><p>{text}</p></div> }
+function Empty({ title, text, action }: { title: string; text: string; action?: ReactNode }) { return <div className="empty-state page-empty"><Sparkles /><h3>{title}</h3><p>{text}</p>{action && <div className="empty-action">{action}</div>}</div> }
 function StatusPill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'success' | 'danger' | 'warning' | 'neutral' }) { return <span className={`status-pill ${tone}`}>{children}</span> }
 function SimpleForm({ title, children, submit, close, danger }: { title: string; children: ReactNode; submit: (e: FormEvent<HTMLFormElement>) => void | Promise<void>; close: () => void; danger?: boolean }) { return <Modal title={title} close={close}><form onSubmit={submit} className="stack-form">{children}<div className="modal-actions"><button type="button" className="button secondary" onClick={close}>Batal</button><button className={`button ${danger ? 'danger' : 'primary'} grow`} type="submit">{danger ? 'Konfirmasi' : 'Simpan'}</button></div></form></Modal> }
 function ConfirmDialog({ title, impact, confirmLabel, close, confirm }: { title: string; impact: string; confirmLabel: string; close: () => void; confirm: () => void | Promise<void> }) {
@@ -445,6 +476,17 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   const [pending, setPending] = useState<{ type: 'category' | 'product'; id: string; name: string } | null>(null)
   const [error, setError] = useState('')
   const [photo, setPhoto] = useState<string>('')
+  const [selectedCategory, setSelectedCategory] = useState<string>('all')
+  const [query, setQuery] = useState('')
+
+  const filteredProducts = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return data.products.filter((p) => {
+      const matchCat = selectedCategory === 'all' || p.categoryId === selectedCategory
+      const matchQuery = !q || p.name.toLowerCase().includes(q) || (p.description && p.description.toLowerCase().includes(q))
+      return matchCat && matchQuery
+    })
+  }, [data.products, selectedCategory, query])
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -507,53 +549,156 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   return (
     <section className="admin-page">
       <PageTitle eyebrow="Katalog lokal" title="Produk & kategori" action={<div className="action-row"><button className="button secondary" onClick={() => setKind('category')}><Plus />Kategori</button><button className="button primary" onClick={() => { setEditingProduct(null); setPhoto(''); setKind('product') }}><Plus />Produk baru</button></div>} />
-      <div className="category-manager">{data.categories.filter((x) => x.id !== 'all').map((c) => <span key={c.id}>{c.name}<button aria-label={`Hapus kategori ${c.name}`} onClick={() => setPending({ type: 'category', id: c.id, name: c.name })}><X size={15} /></button></span>)}</div>
+      
+      {data.categories.filter((x) => x.id !== 'all').length > 0 && (
+        <div className="category-manager-bar">
+          <span className="category-manager-label">Kelola kategori:</span>
+          <div className="category-manager">
+            {data.categories.filter((x) => x.id !== 'all').map((c) => (
+              <span key={c.id} className={selectedCategory === c.id ? 'active' : ''}>
+                <button
+                  type="button"
+                  className="category-filter-chip-btn"
+                  onClick={() => setSelectedCategory(selectedCategory === c.id ? 'all' : c.id)}
+                  title={`Klik untuk filter produk kategori ${c.name}`}
+                >
+                  {c.name}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Hapus kategori ${c.name}`}
+                  onClick={() => setPending({ type: 'category', id: c.id, name: c.name })}
+                >
+                  <X size={15} />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {error && <Alert>{error}</Alert>}
+
+      <div className="table-filter-bar">
+        <div className="category-pill-row" role="tablist" aria-label="Filter kategori produk">
+          {data.categories.map((c) => {
+            const count = c.id === 'all'
+              ? data.products.length
+              : data.products.filter((p) => p.categoryId === c.id).length
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="tab"
+                aria-selected={selectedCategory === c.id}
+                className={`category-pill ${selectedCategory === c.id ? 'active' : ''}`}
+                onClick={() => setSelectedCategory(c.id)}
+              >
+                <span>{c.name}</span>
+                <span className="pill-count">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="table-filter-search-row">
+          <label className="search-box">
+            <Search size={18} />
+            <span className="sr-only">Cari produk</span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cari nama atau deskripsi produk…"
+            />
+          </label>
+          {(selectedCategory !== 'all' || query.trim() !== '') && (
+            <button
+              type="button"
+              className="button ghost small reset-filter-btn"
+              onClick={() => { setSelectedCategory('all'); setQuery('') }}
+            >
+              <X size={15} /> Reset filter ({filteredProducts.length}/{data.products.length})
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="table-card">
         <table>
           <thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th>Aksi</th></tr></thead>
           <tbody>
-            {data.products.map((p) => {
-              const totalStock = p.variants.reduce((s, v) => s + v.stock, 0)
-              return (
-                <tr key={p.id}>
-                  <td>
-                    <div className="table-product">
-                      {p.image ? (
-                        <img src={p.image} alt={p.name} className="table-thumb" />
-                      ) : (
-                        <span style={{ background: p.accent }}><Sparkles size={18} /></span>
-                      )}
-                      <div>
-                        <b>{p.name}</b>
-                        {p.description && <small className="block">{p.description}</small>}
+            {!filteredProducts.length ? (
+              <tr>
+                <td colSpan={5} className="empty-table-cell">
+                  <div className="empty-filter-state">
+                    <Sparkles size={28} />
+                    <p>Tidak ada produk yang cocok dengan filter kategori atau pencarian.</p>
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => { setSelectedCategory('all'); setQuery('') }}
+                    >
+                      Tampilkan semua produk
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              filteredProducts.map((p) => {
+                const totalStock = p.variants.reduce((s, v) => s + v.stock, 0)
+                const categoryObj = data.categories.find((c) => c.id === p.categoryId)
+                return (
+                  <tr key={p.id}>
+                    <td>
+                      <div className="table-product">
+                        {p.image ? (
+                          <img src={p.image} alt={p.name} className="table-thumb" />
+                        ) : (
+                          <span style={{ background: p.accent }}><Sparkles size={18} /></span>
+                        )}
+                        <div>
+                          <b>{p.name}</b>
+                          {p.description && <small className="block">{p.description}</small>}
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>{data.categories.find((c) => c.id === p.categoryId)?.name}</td>
-                  <td>{formatRupiah(Math.min(...p.variants.map((v) => v.price)))}</td>
-                  <td>
-                    {totalStock === 0 ? (
-                      <span className="stock-pill out">Habis</span>
-                    ) : totalStock <= 3 ? (
-                      <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {totalStock}</span>
-                    ) : (
-                      <span className="stock-pill ok">{totalStock}</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="action-row">
-                      <button className="button secondary small" onClick={() => startEditProduct(p)} aria-label={`Edit ${p.name}`}>
-                        <Pencil size={15} />Edit
-                      </button>
-                      <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
-                        <Trash2 size={16} />Hapus
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
+                    </td>
+                    <td>
+                      {categoryObj ? (
+                        <button
+                          type="button"
+                          className="category-link-btn"
+                          aria-label={`Filter kategori ${categoryObj.name}`}
+                          onClick={() => setSelectedCategory(p.categoryId)}
+                          title={`Klik untuk filter kategori ${categoryObj.name}`}
+                        >
+                          <Tag size={13} />
+                          <span>{categoryObj.name}</span>
+                        </button>
+                      ) : '—'}
+                    </td>
+                    <td>{formatRupiah(Math.min(...p.variants.map((v) => v.price)))}</td>
+                    <td>
+                      {totalStock === 0 ? (
+                        <span className="stock-pill out">Habis</span>
+                      ) : totalStock <= 3 ? (
+                        <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {totalStock}</span>
+                      ) : (
+                        <span className="stock-pill ok">{totalStock}</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="action-row">
+                        <button className="button secondary small" onClick={() => startEditProduct(p)} aria-label={`Edit ${p.name}`}>
+                          <Pencil size={15} />Edit
+                        </button>
+                        <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
+                          <Trash2 size={16} />Hapus
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
           </tbody>
         </table>
       </div>
@@ -600,8 +745,21 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
 function StockPage({ data, service, refresh }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void> }) {
   const [variant, setVariant] = useState<{ product: Product; id: string } | null>(null)
   const [error, setError] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<string>('all')
+  const [query, setQuery] = useState('')
+
   const variants = data.products.flatMap((p) => p.variants.map((v) => ({ ...v, product: p })))
   const lowStockCount = variants.filter((v) => v.stock > 0 && v.stock <= 3).length
+
+  const filteredVariants = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return variants.filter((v) => {
+      const matchCat = selectedCategory === 'all' || v.product.categoryId === selectedCategory
+      const matchQuery = !q || v.product.name.toLowerCase().includes(q) || (v.name && v.name.toLowerCase().includes(q)) || (v.sku && v.sku.toLowerCase().includes(q))
+      return matchCat && matchQuery
+    })
+  }, [variants, selectedCategory, query])
+
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault(); if (!variant) return
     const f = new FormData(e.currentTarget)
@@ -623,39 +781,118 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
         </div>
       )}
       {error && <Alert>{error}</Alert>}
+
+      <div className="table-filter-bar">
+        <div className="category-pill-row" role="tablist" aria-label="Filter kategori stok">
+          {data.categories.map((c) => {
+            const count = c.id === 'all'
+              ? variants.length
+              : variants.filter((v) => v.product.categoryId === c.id).length
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="tab"
+                aria-selected={selectedCategory === c.id}
+                className={`category-pill ${selectedCategory === c.id ? 'active' : ''}`}
+                onClick={() => setSelectedCategory(c.id)}
+              >
+                <span>{c.name}</span>
+                <span className="pill-count">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="table-filter-search-row">
+          <label className="search-box">
+            <Search size={18} />
+            <span className="sr-only">Cari stok</span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cari produk, varian, atau SKU…"
+            />
+          </label>
+          {(selectedCategory !== 'all' || query.trim() !== '') && (
+            <button
+              type="button"
+              className="button ghost small reset-filter-btn"
+              onClick={() => { setSelectedCategory('all'); setQuery('') }}
+            >
+              <X size={15} /> Reset filter ({filteredVariants.length}/{variants.length})
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="stock-grid">
         <div className="table-card">
           <table>
-            <thead><tr><th>Produk</th><th>SKU</th><th>Stok</th><th>Aksi</th></tr></thead>
+            <thead><tr><th>Produk</th><th>Kategori</th><th>SKU</th><th>Stok</th><th>Aksi</th></tr></thead>
             <tbody>
-              {variants.map((v) => (
-                <tr key={v.id}>
-                  <td>
-                    <div className="table-product">
-                      {v.product.image ? (
-                        <img src={v.product.image} alt={v.product.name} className="table-thumb" />
-                      ) : (
-                        <span style={{ background: v.product.accent }}><Sparkles size={18} /></span>
-                      )}
-                      <div>
-                        <b>{v.product.name}</b>
-                        {v.name && v.name !== 'Default' && v.name !== v.product.name && <small className="block">{v.name}</small>}
-                      </div>
+              {!filteredVariants.length ? (
+                <tr>
+                  <td colSpan={5} className="empty-table-cell">
+                    <div className="empty-filter-state">
+                      <Sparkles size={28} />
+                      <p>Tidak ada varian stok yang cocok dengan filter kategori atau pencarian.</p>
+                      <button
+                        type="button"
+                        className="button secondary small"
+                        onClick={() => { setSelectedCategory('all'); setQuery('') }}
+                      >
+                        Tampilkan semua stok
+                      </button>
                     </div>
                   </td>
-                  <td><code>{v.sku || '—'}</code></td>
-                  <td className="number-cell">
-                    {v.stock === 0 ? (
-                      <span className="stock-pill out">Habis</span>
-                    ) : v.stock <= 3 ? (
-                      <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {v.stock}</span>
-                    ) : (
-                      <span className="stock-pill ok">{v.stock}</span>
-                    )}
-                  </td>
-                  <td><button className="button secondary small" onClick={() => setVariant({ product: v.product, id: v.id })}>Sesuaikan</button></td>
                 </tr>
-              ))}
+              ) : (
+                filteredVariants.map((v) => {
+                  const categoryObj = data.categories.find((c) => c.id === v.product.categoryId)
+                  return (
+                    <tr key={v.id}>
+                      <td>
+                        <div className="table-product">
+                          {v.product.image ? (
+                            <img src={v.product.image} alt={v.product.name} className="table-thumb" />
+                          ) : (
+                            <span style={{ background: v.product.accent }}><Sparkles size={18} /></span>
+                          )}
+                          <div>
+                            <b>{v.product.name}</b>
+                            {v.name && v.name !== 'Default' && v.name !== v.product.name && <small className="block">{v.name}</small>}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {categoryObj ? (
+                          <button
+                            type="button"
+                            className="category-link-btn"
+                            aria-label={`Filter kategori ${categoryObj.name}`}
+                            onClick={() => setSelectedCategory(v.product.categoryId)}
+                            title={`Klik untuk filter kategori ${categoryObj.name}`}
+                          >
+                            <Tag size={13} />
+                            <span>{categoryObj.name}</span>
+                          </button>
+                        ) : '—'}
+                      </td>
+                      <td><code>{v.sku || '—'}</code></td>
+                      <td className="number-cell">
+                        {v.stock === 0 ? (
+                          <span className="stock-pill out">Habis</span>
+                        ) : v.stock <= 3 ? (
+                          <span className="stock-pill low"><AlertTriangle size={13} /> Sisa {v.stock}</span>
+                        ) : (
+                          <span className="stock-pill ok">{v.stock}</span>
+                        )}
+                      </td>
+                      <td><button className="button secondary small" onClick={() => setVariant({ product: v.product, id: v.id })}>Sesuaikan</button></td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>

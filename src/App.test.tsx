@@ -192,4 +192,94 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
     expect(screen.getByText(/qris \(lunas\)/i)).toBeInTheDocument()
   })
+
+  it('dapat memfilter produk berdasarkan kategori yang diklik pada menu Produk', async () => {
+    const next = await prepared(false)
+    const catPrint = await next.saveCategory({ name: 'Prints' })
+    const catCharm = await next.saveCategory({ name: 'Charms' })
+    await next.saveProduct({ name: 'Poster Rem', categoryId: catPrint.id, price: 25000, stock: 10 })
+    await next.saveProduct({ name: 'Keychain Emilia', categoryId: catCharm.id, price: 35000, stock: 8 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    // Buka menu Produk
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+
+    // Awalnya kedua produk muncul
+    expect(screen.getByText('Poster Rem')).toBeInTheDocument()
+    expect(screen.getByText('Keychain Emilia')).toBeInTheDocument()
+
+    // Klik filter kategori "Charms"
+    const charmsFilter = screen.getByRole('tab', { name: /charms/i })
+    await user.click(charmsFilter)
+
+    // Hanya produk Charms yang muncul, Poster Rem disembunyikan
+    expect(screen.getByText('Keychain Emilia')).toBeInTheDocument()
+    expect(screen.queryByText('Poster Rem')).not.toBeInTheDocument()
+
+    // Klik tombol Reset filter
+    await user.click(screen.getByRole('button', { name: /reset filter/i }))
+    expect(screen.getByText('Poster Rem')).toBeInTheDocument()
+    expect(screen.getByText('Keychain Emilia')).toBeInTheDocument()
+
+    // Klik tombol kategori langsung di kolom tabel (pada baris Poster Rem)
+    const printLink = screen.getByRole('button', { name: /filter kategori prints/i })
+    await user.click(printLink)
+
+    // Sekarang hanya Poster Rem yang muncul
+    expect(screen.getByText('Poster Rem')).toBeInTheDocument()
+    expect(screen.queryByText('Keychain Emilia')).not.toBeInTheDocument()
+  })
+
+  it('dapat memfilter dagangan berdasarkan kategori yang diklik pada kasir', async () => {
+    const next = await prepared(false)
+    const catPrint = await next.saveCategory({ name: 'Postcard' })
+    const catPin = await next.saveCategory({ name: 'Pins' })
+    await next.saveProduct({ name: 'Postcard Summer', categoryId: catPrint.id, price: 10000, stock: 15 })
+    await next.saveProduct({ name: 'Pin Metal Star', categoryId: catPin.id, price: 20000, stock: 5 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    // Kedua produk muncul di kasir
+    expect(screen.getByText('Postcard Summer')).toBeInTheDocument()
+    expect(screen.getByText('Pin Metal Star')).toBeInTheDocument()
+
+    // Klik kategori "Pins" di bar kasir
+    await user.click(screen.getByRole('tab', { name: /pins/i }))
+
+    // Hanya Pin Metal Star yang muncul
+    expect(screen.getByText('Pin Metal Star')).toBeInTheDocument()
+    expect(screen.queryByText('Postcard Summer')).not.toBeInTheDocument()
+
+    // Klik kategori "Semua"
+    await user.click(screen.getByRole('tab', { name: /semua/i }))
+    expect(screen.getByText('Postcard Summer')).toBeInTheDocument()
+    expect(screen.getByText('Pin Metal Star')).toBeInTheDocument()
+  })
+
+  it('dapat memfilter varian inventori berdasarkan kategori yang diklik pada menu Stok', async () => {
+    const next = await prepared(false)
+    const catBook = await next.saveCategory({ name: 'Buku' })
+    const catSticker = await next.saveCategory({ name: 'Stiker' })
+    await next.saveProduct({ name: 'Manga Vol 1', categoryId: catBook.id, price: 40000, stock: 6 })
+    await next.saveProduct({ name: 'Sticker Pack Chibi', categoryId: catSticker.id, price: 15000, stock: 20 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    // Buka menu Stok
+    await user.click(screen.getAllByRole('button', { name: /^stok$/i })[0])
+    expect(await screen.findByRole('heading', { name: /stok booth/i })).toBeInTheDocument()
+
+    // Keduanya ada di tabel stok
+    expect(screen.getByRole('cell', { name: /manga vol 1/i })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: /sticker pack chibi/i })).toBeInTheDocument()
+
+    // Klik filter kategori "Buku"
+    await user.click(screen.getByRole('tab', { name: /buku/i }))
+
+    // Hanya Manga Vol 1 yang tampil di tabel stok
+    expect(screen.getByRole('cell', { name: /manga vol 1/i })).toBeInTheDocument()
+    expect(screen.queryByRole('cell', { name: /sticker pack chibi/i })).not.toBeInTheDocument()
+  })
 })
