@@ -165,7 +165,7 @@ describe('laporan, persistence, dan struk', () => {
   })
 
   it('mendukung edit produk dan mencatat riwayat penyesuaian stok saat diedit', async () => {
-    const { product, a5 } = await seeded()
+    const { product } = await seeded()
     // Edit produk: ubah nama, harga, dan stok dari 3 menjadi 10
     const updated = await service.saveProduct({
       id: product.id,

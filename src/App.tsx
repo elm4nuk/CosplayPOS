@@ -1673,7 +1673,6 @@ function EventsPage({ data, service, refresh, select }: { data: BootstrapData; s
       <div className="event-grid">
         {data.events.map((x) => {
           const isOnlyEvent = data.events.length <= 1
-          const txCount = data.transactions.filter((t) => t.eventId === x.id).length
           return (
             <article className={`event-card ${x.active ? 'active' : ''}`} key={x.id}>
               <div className="event-card-head">

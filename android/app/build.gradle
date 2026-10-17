@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+def keystorePropsFile = rootProject.file("keystore.properties")
+if (!keystorePropsFile.exists()) {
+    keystorePropsFile = rootProject.file("../keystore.properties")
+}
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace = "com.cosplaypos.booth"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +25,25 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                def sf = file(keystoreProps.getProperty('storeFile'))
+                if (!sf.exists() && rootProject.file(keystoreProps.getProperty('storeFile')).exists()) {
+                    sf = rootProject.file(keystoreProps.getProperty('storeFile'))
+                }
+                storeFile sf
+                storePassword keystoreProps.getProperty('storePassword')
+                keyAlias keystoreProps.getProperty('keyAlias')
+                keyPassword keystoreProps.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

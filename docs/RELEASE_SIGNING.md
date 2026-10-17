@@ -164,15 +164,13 @@ Kalau `false` disetujui, konsekuensinya: UI **wajib** mengingatkan ekspor backup
 (sudah ada di antrian permintaan ke Codex, HANDOFF § 9 #5). Perubahan ini belum diterapkan karena ia
 mengubah perilaku produk — menunggu keputusan pemilik.
 
-## 7. Yang belum dikerjakan
+## 7. Status implementasi & kesiapan
 
-- Blok `signingConfigs` di § 3 **belum** ditulis ke `android/app/build.gradle`. Ditahan karena sesi
-  Claude lain sedang menjalankan `npm run android:e2e` (`assembleDebug`) di working tree yang sama;
-  mengubah skrip build saat Gradle mengevaluasinya bisa menggagalkan build itu dan menghasilkan
-  laporan uji yang salah. Terapkan setelah sesi itu selesai.
-- Keystore belum dibuat (§ 2 — butuh password pemilik).
-- `assembleRelease` belum pernah dijalankan, jadi klaim "APK rilis sukses" belum boleh dibuat.
-- `allowBackup` belum diubah (§ 6 — menunggu keputusan pemilik).
-- `.gitignore` di root repo belum memuat pola keystore. `android/.gitignore` hanya berlaku untuk
-  subfolder `android/`, jadi keystore yang tersimpan di root repo masih bisa ter-commit. File itu
-  dipakai bersama dengan sesi/Codex, jadi tidak saya ubah sendiri — lihat permintaan di HANDOFF.
+- [x] Blok `signingConfigs.release` sudah diterapkan di `android/app/build.gradle` dengan penjagaan `keystore.properties` (fallback root project).
+- [x] `android:allowBackup="false"` sudah diset di `android/app/src/main/AndroidManifest.xml` demi integritas restore & database lokal.
+- [x] `.gitignore` di root dan `android/.gitignore` sudah mengabaikan `*.jks`, `*.keystore`, `*.p12`, dan `keystore.properties`.
+- [x] Ikon peluncur Android adaptif kustom CosplayPOS (`ic_launcher_foreground.xml` & `ic_launcher_background.xml`) sudah dipasang di `android/app/src/main/res/`.
+- [x] Script otomasi `scripts/create-release-keystore.mjs` (`npm run android:key`) tersedia untuk membuat keystore rilis + `keystore.properties` dalam 1 langkah.
+- [x] Script build release `npm run android:release` (APK) dan `npm run android:bundle` (AAB) sudah ditambahkan di `package.json`.
+- [ ] Pembuatan keystore rilis permanen oleh pemilik via `npm run android:key` (membutuhkan password rahasia pemilik).
+- [ ] Pengujian manual pada HP fisik nyata sebelum hari-H event.
