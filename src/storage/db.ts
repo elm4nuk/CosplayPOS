@@ -23,6 +23,7 @@ export type ProductRow = {
   categoryId: string
   description: string
   accent: string
+  image?: string
   featured: boolean
   archived: boolean
   variants: VariantRow[]

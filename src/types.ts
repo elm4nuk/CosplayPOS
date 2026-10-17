@@ -16,6 +16,7 @@ export type Product = {
   categoryId: string
   description: string
   accent: string
+  image?: string
   featured?: boolean
   variants: ProductVariant[]
 }

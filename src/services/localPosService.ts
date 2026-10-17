@@ -23,9 +23,12 @@ export type SaveProductInput = {
   categoryId: string
   description?: string
   accent?: string
+  image?: string
   featured?: boolean
   /** `stock` is only used for NEW variants. Existing stock changes go through adjustStock(). */
-  variants: { id?: string; name: string; price: number; sku?: string; stock?: number }[]
+  variants?: { id?: string; name?: string; price: number; sku?: string; stock?: number }[]
+  price?: number
+  stock?: number
 }
 
 export type EventReport = {
@@ -81,7 +84,7 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
 
   const ready = () => (readyPromise ??= init())
 
-  const toProduct = (row: ProductRow): Product => ({ id: row.id, name: row.name, categoryId: row.categoryId, description: row.description, accent: row.accent, featured: row.featured, variants: row.variants.map((v) => ({ ...v })) })
+  const toProduct = (row: ProductRow): Product => ({ id: row.id, name: row.name, categoryId: row.categoryId, description: row.description, accent: row.accent, image: row.image, featured: row.featured, variants: row.variants.map((v) => ({ ...v })) })
 
   const toTransaction = (row: TransactionRow, stockOf: Map<string, number>): Transaction => ({
     id: row.id, number: row.number, eventId: row.eventId, createdAt: row.createdAt, cashierName: row.cashierName,
@@ -262,7 +265,9 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
       await ready()
       const actor = (await settings()).defaultCashier
       const name = text(input.name, 'Nama produk')
-      if (!input.variants.length) fail('VALIDATION', 'Produk perlu minimal satu varian.')
+      const rawVariants = input.variants && input.variants.length > 0
+        ? input.variants
+        : [{ name: 'Default', price: input.price ?? 0, stock: input.stock ?? 0 }]
       return db.transaction('rw', db.categories, db.products, db.stockMovements, async () => {
         if (!(await db.categories.get(input.categoryId))) fail('VALIDATION', 'Pilih kategori yang ada.')
         const existing = input.id ? await db.products.get(input.id) : undefined
@@ -270,15 +275,16 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         const timestamp = now().toISOString()
         const movements: StockMovementRow[] = []
         const productId = existing?.id ?? uuid()
-        const variants = input.variants.map((v): VariantRow => {
+        const variants = rawVariants.map((v): VariantRow => {
           const old = v.id ? existing?.variants.find((o) => o.id === v.id) : undefined
-          const row = { id: old?.id ?? uuid(), name: text(v.name, 'Nama varian'), price: rupiah(v.price, 'Harga'), sku: v.sku?.trim() ?? old?.sku ?? '', stock: old ? old.stock : (v.stock === undefined ? 0 : rupiah(v.stock, 'Stok awal')) }
+          const row = { id: old?.id ?? uuid(), name: v.name?.trim() ? v.name.trim() : 'Default', price: rupiah(v.price, 'Harga'), sku: v.sku?.trim() ?? old?.sku ?? '', stock: old ? old.stock : (v.stock === undefined ? 0 : rupiah(v.stock, 'Stok awal')) }
           if (!old && row.stock > 0) movements.push({ id: uuid(), kind: 'initial', productId, variantId: row.id, productName: name, variantName: row.name, delta: row.stock, stockAfter: row.stock, reason: 'Stok awal', actor, createdAt: timestamp })
           return row
         })
         const row: ProductRow = {
           id: productId, name, categoryId: input.categoryId, description: input.description?.trim() ?? existing?.description ?? '',
-          accent: input.accent ?? existing?.accent ?? '#ffd6e7', featured: input.featured ?? existing?.featured ?? false, archived: false,
+          accent: input.accent ?? existing?.accent ?? '#ffd6e7', image: input.image !== undefined ? input.image : existing?.image,
+          featured: input.featured ?? existing?.featured ?? false, archived: false,
           variants, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp,
         }
         await db.products.put(row)

@@ -71,4 +71,36 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     await openTill(next); const user = userEvent.setup(); await user.click(screen.getAllByRole('button', { name: /^transaksi$/i })[0])
     await waitFor(() => expect(screen.getByText(/TRX-|CCF-/)).toBeInTheDocument())
   })
+
+  it('tambah produk memiliki upload foto dan tidak ada input varian', async () => {
+    const next = await prepared(false)
+    await next.saveCategory({ name: 'Merchandise' })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /produk baru/i }))
+    expect(await screen.findByRole('heading', { name: /produk baru/i })).toBeInTheDocument()
+
+    expect(screen.queryByLabelText(/varian/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/unggah foto produk/i)).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText(/nama produk/i), 'Stiker Hologram')
+    await user.type(screen.getByLabelText(/deskripsi/i), 'Stiker vinyl tahan air')
+    await user.type(screen.getByLabelText(/harga/i), '12000')
+    await user.type(screen.getByLabelText(/stok awal/i), '25')
+
+    await user.click(screen.getByRole('button', { name: /^simpan$/i }))
+
+    await waitFor(() => expect(screen.getByText('Stiker Hologram')).toBeInTheDocument())
+    expect(screen.getByText('Rp 12.000')).toBeInTheDocument()
+    expect(screen.getByText('25')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: /^kasir$/i })[0])
+    expect(await screen.findByRole('heading', { name: /pilih dagangan/i })).toBeInTheDocument()
+    expect(screen.getByText('Stiker Hologram')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /tambah stiker hologram/i })).toBeInTheDocument()
+  })
 })

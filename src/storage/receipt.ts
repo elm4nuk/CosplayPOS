@@ -41,7 +41,8 @@ export function formatReceiptText(tx: Transaction, settings: ReceiptSettings, wi
     rule,
   ]
   for (const item of tx.items) {
-    lines.push(...wrap(`${item.productName} (${item.variantName})`, width))
+    const hasVariant = item.variantName && item.variantName !== 'Default' && item.variantName !== item.productName
+    lines.push(...wrap(hasVariant ? `${item.productName} (${item.variantName})` : item.productName, width))
     lines.push(row(`  ${item.quantity} x ${money(item.price)}`, money(item.price * item.quantity), width))
   }
   lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width), row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
