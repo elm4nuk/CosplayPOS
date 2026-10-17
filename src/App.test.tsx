@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from './App'
@@ -282,4 +282,111 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByRole('cell', { name: /manga vol 1/i })).toBeInTheDocument()
     expect(screen.queryByRole('cell', { name: /sticker pack chibi/i })).not.toBeInTheDocument()
   })
+
+  it('dapat menambah promo bundle di kasir, menghitung diskon dan mencantumkannya di struk', async () => {
+    const next = await prepared(false)
+    const cat = await next.saveCategory({ name: 'Merch' })
+    const p1 = await next.saveProduct({ name: 'Gantungan Akrilik', categoryId: cat.id, price: 30000, stock: 10 })
+    const p2 = await next.saveProduct({ name: 'Art Print A5', categoryId: cat.id, price: 25000, stock: 10 })
+    await next.saveBundle({
+      name: 'Bundle Hemat Wibu',
+      price: 45000,
+      items: [
+        { productId: p1.id, variantId: p1.variants[0].id, quantity: 1 },
+        { productId: p2.id, variantId: p2.variants[0].id, quantity: 1 },
+      ],
+      active: true,
+    })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    expect(screen.getByText('Bundle Hemat Wibu')).toBeInTheDocument()
+    expect(screen.getByText('Hemat Rp 10.000')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /tambah bundle hemat wibu/i }))
+
+    expect(screen.getByText('Bundle Hemat Wibu', { selector: '.cart-promo-info b' })).toBeInTheDocument()
+    expect(screen.getByText('Hemat Rp 10.000', { selector: '.cart-promo-info small' })).toBeInTheDocument()
+    expect(screen.getByText('-Rp 10.000', { selector: '.discount-row span:last-child' })).toBeInTheDocument()
+    expect(screen.getByText('Rp 45.000', { selector: '.grand-total strong' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /bayar sekarang/i }))
+    const checkoutModal = screen.getByRole('dialog', { name: /pembayaran/i })
+    expect(within(checkoutModal).getByText(/diskon rp 10\.000/i)).toBeInTheDocument()
+    expect(within(checkoutModal).getByText('Rp 45.000', { selector: '.checkout-total strong' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /uang pas/i }))
+    await user.click(screen.getByRole('button', { name: /simpan pembayaran/i }))
+
+    expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
+    expect(screen.getByText(/subtotal/i)).toBeInTheDocument()
+    expect(screen.getByText(/-Rp 10\.000/i)).toBeInTheDocument()
+    expect(screen.getAllByText('Rp 45.000', { selector: '.receipt-totals b' }).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('dapat berpindah ke tab Promo Bundle di menu Produk dan membuat bundle baru', async () => {
+    const next = await prepared(false)
+    const cat = await next.saveCategory({ name: 'Pin' })
+    await next.saveProduct({ name: 'Badge Pin A', categoryId: cat.id, price: 15000, stock: 5 })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /promo bundle/i }))
+    expect(screen.getByText(/belum ada promo bundle/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /buat promo bundle/i }))
+    expect(await screen.findByRole('dialog', { name: /promo bundle baru/i })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText(/nama promo bundle/i), 'Bundle Pin Kembar')
+    await user.type(screen.getByLabelText(/harga spesial bundle/i), '25000')
+    await user.click(screen.getByRole('button', { name: /simpan promo bundle/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /promo bundle baru/i })).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Bundle Pin Kembar')).toBeInTheDocument()
+    expect(screen.getByText('Rp 25.000', { selector: '.bundle-price-big' })).toBeInTheDocument()
+  })
+
+  it('dapat melihat laporan perbandingan antar event', async () => {
+    const next = await prepared(false)
+    const data = await next.getBootstrap()
+    const ev1 = data.events[0]
+    const ev2 = await next.saveEvent({ name: 'Comic Frontier 20', dateLabel: '10 Nov 2026', venue: 'ICE BSD' })
+    const cat = await next.saveCategory({ name: 'Prints' })
+    const prod = await next.saveProduct({ name: 'Art Print Rem', categoryId: cat.id, price: 50000, stock: 100 })
+
+    await next.createTransaction({
+      eventId: ev1.id,
+      items: [{ productId: prod.id, variantId: prod.variants[0].id, quantity: 2 }],
+      cashReceived: 100000,
+      paymentMethod: 'cash',
+      idempotencyKey: crypto.randomUUID(),
+    })
+    await next.createTransaction({
+      eventId: ev2.id,
+      items: [{ productId: prod.id, variantId: prod.variants[0].id, quantity: 3 }],
+      cashReceived: 150000,
+      paymentMethod: 'qris',
+      idempotencyKey: crypto.randomUUID(),
+    })
+
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^laporan$/i })[0])
+    expect(await screen.findByRole('heading', { name: /laporan/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /perbandingan antar event/i }))
+
+    expect(await screen.findByText(/event terlaris \(omzet\)/i)).toBeInTheDocument()
+    expect(screen.getAllByText('Comic Frontier 20').length).toBeGreaterThan(0)
+    expect(screen.getByText('Perbandingan Omzet Antar Event')).toBeInTheDocument()
+    expect(screen.getByText('Produk Terlaris Lintas Event')).toBeInTheDocument()
+    expect(screen.getByText('Tabel Evaluasi Komparasi Seluruh Event')).toBeInTheDocument()
+  })
 })
+

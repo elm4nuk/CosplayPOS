@@ -51,6 +51,9 @@ export type TransactionRow = {
   createdAt: string
   cashierName: string
   items: TransactionItemRow[]
+  subtotal?: number
+  discount?: number
+  promoName?: string
   total: number
   cashReceived: number
   change: number

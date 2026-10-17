@@ -63,7 +63,8 @@ function checkRows(data: BackupData) {
   for (const t of data.transactions as Record<string, unknown>[]) {
     if (!isStr(t.number) || !eventIds.has(t.eventId as string) || !isInt(t.total, 0) || !isInt(t.cashReceived, 0) || !Array.isArray(t.items)) invalid(`transaksi ${String(t.number ?? t.id)} rusak.`)
     const sum = (t.items as Record<string, unknown>[]).reduce((acc, item) => acc + (item.price as number) * (item.quantity as number), 0)
-    if (sum !== t.total) invalid(`total transaksi ${String(t.number)} tidak cocok dengan itemnya.`)
+    const discount = (t.discount as number) || 0
+    if (sum - discount !== t.total) invalid(`total transaksi ${String(t.number)} tidak cocok dengan itemnya.`)
   }
   for (const m of data.stockMovements as Record<string, unknown>[]) {
     if (!isInt(m.delta) || !isInt(m.stockAfter, 0)) invalid('riwayat stok rusak.')

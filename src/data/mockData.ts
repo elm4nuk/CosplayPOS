@@ -31,4 +31,17 @@ export const initialMockData: BootstrapData = {
     { id: 's2', productName: 'Acrylic Charm Mochi', variantName: 'Mint', delta: -2, reason: 'Rusak saat display', createdAt: '16 Okt, 09.12', actor: 'Kasir Dua' },
     { id: 's3', productName: 'Bundle Booth Bestie', variantName: 'Bundle', delta: 8, reason: 'Restock booth', createdAt: '16 Okt, 09.40', actor: 'Kasir Demo' },
   ],
+  bundles: [
+    {
+      id: 'b1',
+      name: 'Paket Hemat Art & Charm',
+      description: '1 Print Cosmic Parade + 1 Acrylic Charm Mochi',
+      price: 50000,
+      active: true,
+      items: [
+        { productId: 'p1', variantId: 'v1', quantity: 1 },
+        { productId: 'p2', variantId: 'v3', quantity: 1 },
+      ],
+    },
+  ],
 }

@@ -2,7 +2,7 @@ import { createBackup, parseBackup, restoreBackup, type BackupFile } from '../st
 import { PosDatabase, type CategoryRow, type EventRow, type ProductRow, type StockMovementRow, type TransactionRow, type VariantRow } from '../storage/db'
 import { PosError } from '../storage/errors'
 import { formatReceiptText } from '../storage/receipt'
-import type { BootstrapData, Product, Transaction } from '../types'
+import type { BootstrapData, Product, PromoBundle, PromoBundleItem, Transaction } from '../types'
 import type { PosService } from './posService'
 
 export type ShopSettings = { shopName: string; footer: string; receiptPrefix: string; defaultCashier: string; qrisImage?: string }
@@ -16,6 +16,8 @@ export type CheckoutInput = {
   paymentMethod?: 'cash' | 'qris'
   /** One key per checkout attempt. Retrying with the same key never sells twice. */
   idempotencyKey?: string
+  discount?: number
+  promoName?: string
 }
 
 export type SaveProductInput = {
@@ -42,6 +44,24 @@ export type EventReport = {
   voidCount: number
   byHour: { hour: number; revenue: number; transactions: number }[]
   topProducts: { productId: string; productName: string; quantity: number; revenue: number }[]
+}
+
+export type EventComparisonItem = {
+  event: EventRow
+  report: EventReport
+  growthPercent?: number
+}
+
+export type EventComparisonReport = {
+  events: EventComparisonItem[]
+  summary: {
+    totalRevenueAllEvents: number
+    totalTransactionsAllEvents: number
+    bestRevenueEvent: { id: string; name: string; revenue: number } | null
+    bestTransactionsEvent: { id: string; name: string; count: number } | null
+    highestTicketEvent: { id: string; name: string; averageTicket: number } | null
+    overallTopProducts: { productId: string; productName: string; quantity: number; revenue: number }[]
+  }
 }
 
 export type LocalServiceOptions = {
@@ -91,13 +111,14 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
   const toTransaction = (row: TransactionRow, stockOf: Map<string, number>): Transaction => ({
     id: row.id, number: row.number, eventId: row.eventId, createdAt: row.createdAt, cashierName: row.cashierName,
     items: row.items.map((item) => ({ productId: item.productId, productName: item.productName, variantId: item.variantId, variantName: item.variantName, price: item.price, quantity: item.quantity, stock: stockOf.get(item.variantId) ?? 0 })),
+    subtotal: row.subtotal ?? row.total, discount: row.discount ?? 0, promoName: row.promoName,
     total: row.total, cashReceived: row.cashReceived, change: row.change, paymentMethod: row.paymentMethod ?? 'cash', status: row.status, voidedAt: row.voidedAt, voidReason: row.voidReason,
   })
 
   const stockMap = (products: ProductRow[]) => new Map(products.flatMap((p) => p.variants.map((v) => [v.id, v.stock] as const)))
 
-  const checkoutSignature = (eventId: string, items: { variantId: string; quantity: number }[], cash: number, method = 'cash') =>
-    `${eventId}|${method}|${cash}|${items.map((i) => `${i.variantId}:${i.quantity}`).sort().join(',')}`
+  const checkoutSignature = (eventId: string, items: { variantId: string; quantity: number }[], cash: number, method = 'cash', discount = 0) =>
+    `${eventId}|${method}|${cash}|${discount}|${items.map((i) => `${i.variantId}:${i.quantity}`).sort().join(',')}`
 
   async function maybeAutoBackup(seq: number) {
     if (!options.autoBackup || seq % autoBackupEvery !== 0) return
@@ -121,17 +142,20 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
     async getBootstrap(): Promise<BootstrapData> {
       await ready()
       return db.transaction('r', [db.meta, db.categories, db.products, db.events, db.transactions, db.stockMovements], async () => {
-        const [categories, products, events, transactions, movements, activeId] = await Promise.all([
+        const [categories, products, events, transactions, movements, activeId, bundleMeta] = await Promise.all([
           db.categories.orderBy('sortOrder').toArray(), db.products.toArray(), db.events.orderBy('createdAt').toArray(),
           db.transactions.orderBy('seq').reverse().toArray(), db.stockMovements.orderBy('createdAt').reverse().filter((m) => m.kind !== 'sale').limit(100).toArray(), activeEventId(),
+          db.meta.get('bundles'),
         ])
         const stockOf = stockMap(products)
+        const bundles = (bundleMeta?.value as PromoBundle[] | undefined) ?? []
         return {
           categories: [ALL_CATEGORY, ...categories.map(({ id, name, color }) => ({ id, name, color }))],
           products: products.filter((p) => !p.archived).map(toProduct),
           events: events.map((e) => ({ id: e.id, name: e.name, venue: e.venue, dateLabel: e.dateLabel, active: e.id === activeId })),
           transactions: transactions.map((t) => toTransaction(t, stockOf)),
           stockAdjustments: movements.map((m) => ({ id: m.id, productName: m.productName, variantName: m.variantName, delta: m.delta, reason: m.reason, createdAt: m.createdAt, actor: m.actor })),
+          bundles,
         }
       })
     },
@@ -149,14 +173,14 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
       }
       const lines = [...merged.values()]
       if (!lines.length) fail('EMPTY_CART', 'Keranjang masih kosong.')
-      const signature = checkoutSignature(input.eventId, lines, cash, isQris ? 'qris' : 'cash')
+      const signature = checkoutSignature(input.eventId, lines, cash, isQris ? 'qris' : 'cash', input.discount ?? 0)
       const prefix = (await settings()).receiptPrefix
 
       const row = await db.transaction('rw', [db.meta, db.events, db.products, db.transactions, db.stockMovements], async () => {
         if (input.idempotencyKey) {
           const existing = await db.transactions.get(input.idempotencyKey)
           if (existing) {
-            if (checkoutSignature(existing.eventId, existing.items, existing.cashReceived, existing.paymentMethod ?? 'cash') !== signature) fail('IDEMPOTENCY_CONFLICT', 'Kunci transaksi sudah dipakai untuk pesanan lain.')
+            if (checkoutSignature(existing.eventId, existing.items, existing.cashReceived, existing.paymentMethod ?? 'cash', existing.discount ?? 0) !== signature) fail('IDEMPOTENCY_CONFLICT', 'Kunci transaksi sudah dipakai untuk pesanan lain.')
             return { tx: existing, replay: true }
           }
         }
@@ -176,7 +200,9 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
 
         const timestamp = now().toISOString()
         const valid = items as { product: ProductRow; variant: VariantRow; line: (typeof lines)[number] }[]
-        const total = valid.reduce((sum, { variant, line }) => sum + variant.price * line.quantity, 0)
+        const subtotal = valid.reduce((sum, { variant, line }) => sum + variant.price * line.quantity, 0)
+        const discount = Math.max(0, Math.min(subtotal, input.discount ?? 0))
+        const total = subtotal - discount
         if (!Number.isSafeInteger(total)) fail('VALIDATION', 'Total terlalu besar.')
         const actualCash = isQris ? total : cash
         if (!isQris && cash < total) fail('INSUFFICIENT_CASH', 'Uang diterima masih kurang.', { total, cashReceived: cash })
@@ -190,6 +216,7 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         const tx: TransactionRow = {
           id, seq, number: `${prefix}-${String(seq).padStart(4, '0')}`, eventId: input.eventId, createdAt: timestamp, cashierName: actor,
           items: valid.map(({ product, variant, line }) => ({ productId: product.id, productName: product.name, variantId: variant.id, variantName: variant.name, sku: variant.sku, price: variant.price, quantity: line.quantity })),
+          subtotal, discount, promoName: input.promoName,
           total, cashReceived: actualCash, change: actualCash - total, paymentMethod: isQris ? 'qris' : 'cash', status: 'completed',
         }
         await db.products.bulkPut([...products.values()].map((p) => ({ ...p, updatedAt: timestamp })))
@@ -368,6 +395,96 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         averageTicket: done.length ? Math.round(revenue / done.length) : 0,
         byHour: [...hours.values()].sort((a, b) => a.hour - b.hour),
         topProducts: [...top.values()].sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue).slice(0, 10),
+      }
+    },
+
+    async getBundles(): Promise<PromoBundle[]> {
+      await ready()
+      return ((await db.meta.get('bundles'))?.value as PromoBundle[] | undefined) ?? []
+    },
+
+    async saveBundle(input: { id?: string; name: string; description?: string; price: number; items: PromoBundleItem[]; active?: boolean }): Promise<PromoBundle> {
+      await ready()
+      const name = text(input.name, 'Nama bundle')
+      const bundlePrice = rupiah(input.price, 'Harga bundle')
+      if (!input.items || !input.items.length) fail('VALIDATION', 'Bundle harus berisi minimal 1 item.')
+      for (const item of input.items) {
+        if (!item.productId || !item.variantId) fail('VALIDATION', 'Produk dan varian dalam bundle wajib dipilih.')
+        if (!Number.isSafeInteger(item.quantity) || item.quantity < 1) fail('VALIDATION', 'Jumlah item bundle harus >= 1.')
+      }
+      const current = await service.getBundles()
+      const bundleId = input.id ?? uuid()
+      const updated: PromoBundle = {
+        id: bundleId,
+        name,
+        description: input.description?.trim() ?? '',
+        price: bundlePrice,
+        items: input.items,
+        active: input.active ?? true,
+      }
+      const next = current.some((b) => b.id === bundleId)
+        ? current.map((b) => (b.id === bundleId ? updated : b))
+        : [...current, updated]
+      await db.meta.put({ key: 'bundles', value: next })
+      return updated
+    },
+
+    async deleteBundle(id: string): Promise<void> {
+      await ready()
+      const current = await service.getBundles()
+      const next = current.filter((b) => b.id !== id)
+      await db.meta.put({ key: 'bundles', value: next })
+    },
+
+    async toggleBundleActive(id: string): Promise<void> {
+      await ready()
+      const current = await service.getBundles()
+      const next = current.map((b) => (b.id === id ? { ...b, active: !b.active } : b))
+      await db.meta.put({ key: 'bundles', value: next })
+    },
+
+    async getEventComparison(): Promise<EventComparisonReport> {
+      await ready()
+      const events = await db.events.orderBy('createdAt').toArray()
+      const comparisonItems: EventComparisonItem[] = []
+      let prevRevenue: number | null = null
+
+      for (const event of events) {
+        const report = await service.getEventReport(event.id)
+        let growthPercent: number | undefined = undefined
+        if (prevRevenue !== null && prevRevenue > 0) {
+          growthPercent = Math.round(((report.revenue - prevRevenue) / prevRevenue) * 100)
+        }
+        comparisonItems.push({ event, report, growthPercent })
+        prevRevenue = report.revenue
+      }
+
+      const totalRevenue = comparisonItems.reduce((sum, item) => sum + item.report.revenue, 0)
+      const totalTransactions = comparisonItems.reduce((sum, item) => sum + item.report.transactionCount, 0)
+      const sortedByRevenue = [...comparisonItems].sort((a, b) => b.report.revenue - a.report.revenue)
+      const sortedByTransactions = [...comparisonItems].sort((a, b) => b.report.transactionCount - a.report.transactionCount)
+      const sortedByTicket = [...comparisonItems].sort((a, b) => b.report.averageTicket - a.report.averageTicket)
+
+      const productAgg = new Map<string, { productId: string; productName: string; quantity: number; revenue: number }>()
+      for (const item of comparisonItems) {
+        for (const prod of item.report.topProducts) {
+          const existing = productAgg.get(prod.productId) ?? { productId: prod.productId, productName: prod.productName, quantity: 0, revenue: 0 }
+          existing.quantity += prod.quantity
+          existing.revenue += prod.revenue
+          productAgg.set(prod.productId, existing)
+        }
+      }
+
+      return {
+        events: comparisonItems,
+        summary: {
+          totalRevenueAllEvents: totalRevenue,
+          totalTransactionsAllEvents: totalTransactions,
+          bestRevenueEvent: sortedByRevenue[0] && sortedByRevenue[0].report.revenue > 0 ? { id: sortedByRevenue[0].event.id, name: sortedByRevenue[0].event.name, revenue: sortedByRevenue[0].report.revenue } : null,
+          bestTransactionsEvent: sortedByTransactions[0] && sortedByTransactions[0].report.transactionCount > 0 ? { id: sortedByTransactions[0].event.id, name: sortedByTransactions[0].event.name, count: sortedByTransactions[0].report.transactionCount } : null,
+          highestTicketEvent: sortedByTicket[0] && sortedByTicket[0].report.averageTicket > 0 ? { id: sortedByTicket[0].event.id, name: sortedByTicket[0].event.name, averageTicket: sortedByTicket[0].report.averageTicket } : null,
+          overallTopProducts: [...productAgg.values()].sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue).slice(0, 5),
+        },
       }
     },
 

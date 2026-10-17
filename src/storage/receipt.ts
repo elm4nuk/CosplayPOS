@@ -45,6 +45,13 @@ export function formatReceiptText(tx: Transaction, settings: ReceiptSettings, wi
     lines.push(...wrap(hasVariant ? `${item.productName} (${item.variantName})` : item.productName, width))
     lines.push(row(`  ${item.quantity} x ${money(item.price)}`, money(item.price * item.quantity), width))
   }
+  if (tx.discount && tx.discount > 0) {
+    const subtotal = tx.subtotal ?? (tx.total + tx.discount)
+    lines.push(rule)
+    lines.push(row('Subtotal', `Rp ${money(subtotal)}`, width))
+    const promoLabel = tx.promoName ? `Diskon (${tx.promoName})` : 'Diskon Bundle'
+    lines.push(row(promoLabel, `-Rp ${money(tx.discount)}`, width))
+  }
   lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width))
   if (tx.paymentMethod === 'qris') {
     lines.push(row('Metode', 'QRIS (Lunas)', width))

@@ -39,6 +39,21 @@ export type CartItem = {
   stock: number
 }
 
+export type PromoBundleItem = {
+  productId: string
+  variantId: string
+  quantity: number
+}
+
+export type PromoBundle = {
+  id: string
+  name: string
+  description?: string
+  price: number
+  items: PromoBundleItem[]
+  active: boolean
+}
+
 export type PaymentMethod = 'cash' | 'qris'
 
 export type Transaction = {
@@ -48,6 +63,9 @@ export type Transaction = {
   createdAt: string
   cashierName: string
   items: CartItem[]
+  subtotal?: number
+  discount?: number
+  promoName?: string
   total: number
   cashReceived: number
   change: number
@@ -73,4 +91,5 @@ export type BootstrapData = {
   events: BoothEvent[]
   transactions: Transaction[]
   stockAdjustments: StockAdjustment[]
+  bundles: PromoBundle[]
 }

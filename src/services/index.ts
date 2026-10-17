@@ -16,4 +16,4 @@ export const posService = createLocalPosService({
 if (import.meta.env.VITE_E2E === '1') Object.assign(window, { __cosplayPosE2E: { service: posService, files } })
 
 export { PosError, isPosError } from '../storage/errors'
-export type { CheckoutInput, EventReport, LocalPosService, ReadyState, SaveProductInput, ShopSettings } from './localPosService'
+export type { CheckoutInput, EventReport, EventComparisonReport, LocalPosService, ReadyState, SaveProductInput, ShopSettings } from './localPosService'

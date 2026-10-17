@@ -188,6 +188,92 @@ describe('laporan, persistence, dan struk', () => {
     expect(adjustment).toBeDefined()
     expect(adjustment?.reason).toContain('edit produk')
   })
+
+  it('mendukung pembuatan, edit, toggle, dan hapus promo bundle', async () => {
+    const { product, a5, a4 } = await seeded()
+    // Simpan bundle baru
+    const bundle = await service.saveBundle({
+      name: 'Paket Cosmic Double',
+      description: '1 A5 + 1 A4 dengan harga spesial',
+      price: 55000, // Harga normal 25000 + 40000 = 65000 (hemat 10000)
+      items: [
+        { productId: product.id, variantId: a5.id, quantity: 1 },
+        { productId: product.id, variantId: a4.id, quantity: 1 },
+      ],
+    })
+
+    expect(bundle.name).toBe('Paket Cosmic Double')
+    expect(bundle.price).toBe(55000)
+    expect(bundle.active).toBe(true)
+
+    // Cek di getBootstrap
+    let bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.some((b) => b.id === bundle.id)).toBe(true)
+
+    // Toggle active
+    await service.toggleBundleActive(bundle.id)
+    bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.find((b) => b.id === bundle.id)?.active).toBe(false)
+
+    // Hapus bundle
+    await service.deleteBundle(bundle.id)
+    bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.some((b) => b.id === bundle.id)).toBe(false)
+  })
+
+  it('mendukung checkout dengan diskon promo bundle dan struk mencatat diskon', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    // Checkout 1x A5 (25.000) + 1x A4 (40.000) = Subtotal 65.000, diskon 10.000 -> Total 55.000
+    const tx = await service.createTransaction({
+      eventId,
+      items: [
+        { productId: product.id, variantId: a5.id, quantity: 1 },
+        { productId: product.id, variantId: a4.id, quantity: 1 },
+      ],
+      cashReceived: 60000,
+      discount: 10000,
+      promoName: 'Paket Cosmic Double',
+    })
+
+    expect(tx.subtotal).toBe(65000)
+    expect(tx.discount).toBe(10000)
+    expect(tx.total).toBe(55000)
+    expect(tx.change).toBe(5000)
+    expect(tx.promoName).toBe('Paket Cosmic Double')
+
+    // Struk harus mencantumkan subtotal dan diskon
+    const receipt = await service.getReceiptText(tx.id)
+    expect(receipt).toContain('Subtotal')
+    expect(receipt).toContain('Diskon')
+    expect(receipt).toContain('-Rp 10.000')
+    expect(receipt).toContain('TOTAL')
+  })
+
+  it('menghasilkan laporan perbandingan antar event secara akurat', async () => {
+    const { product, a5, a4, eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'Anime Expo Jakarta', venue: 'Balai Kartini', dateLabel: '20 Okt 2026' })
+
+    // Transaksi di Event 1: Omzet 50.000
+    await service.createTransaction({
+      eventId: ev1,
+      items: [{ productId: product.id, variantId: a5.id, quantity: 2 }],
+      cashReceived: 50000,
+    })
+
+    // Transaksi di Event 2: Omzet 40.000
+    await service.createTransaction({
+      eventId: ev2.id,
+      items: [{ productId: product.id, variantId: a4.id, quantity: 1 }],
+      cashReceived: 50000,
+    })
+
+    const comparison = await service.getEventComparison()
+    expect(comparison.events).toHaveLength(2)
+    expect(comparison.summary.totalRevenueAllEvents).toBe(90000)
+    expect(comparison.summary.totalTransactionsAllEvents).toBe(2)
+    expect(comparison.summary.bestRevenueEvent?.id).toBe(ev1)
+    expect(comparison.summary.bestRevenueEvent?.revenue).toBe(50000)
+  })
 })
 
 describe('backup tanpa kredensial', () => {
