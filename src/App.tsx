@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   AlertTriangle, Archive, BadgeCheck, Banknote, BarChart3, CalendarDays, Check, ChevronDown, CircleAlert,
-  CircleDollarSign, Download, FileUp, Gift, History, ImagePlus, LayoutGrid,
+  CircleDollarSign, Download, FileUp, Gift, History, LayoutGrid,
   Minus, Package, Pencil, Plus, QrCode, ReceiptText, Search, Settings, Share2,
   ShoppingBag, Sparkles, Tag, Target, Trash2, TrendingUp, Trophy, Upload, WifiOff, X, Zap,
 } from 'lucide-react'
@@ -9,6 +9,8 @@ import { backupFileName, saveToDevice, shareFile } from './platform/files'
 import { optimizeImageFile } from './platform/images'
 import { isPosError, posService, type EventComparisonReport, type EventReport, type LocalPosService, type ShopSettings } from './services'
 import type { BoothEvent, BootstrapData, CartItem, Product, PromoBundle, PromoBundleItem, Transaction } from './types'
+import { ProductFormModal } from './features/products/ProductFormModal'
+import { TransactionsPage } from './features/transactions/TransactionsPage'
 
 type Screen = 'pos' | 'products' | 'stock' | 'events' | 'reports' | 'transactions' | 'settings'
 const rupiah = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
@@ -160,12 +162,13 @@ function BundleCard({
           </div>
           <button
             className="button primary small product-single-btn bundle-add-btn"
-            disabled={!isAvailable}
+            disabled
             onClick={() => addBundle(bundle)}
             aria-label={`Tambah ${bundle.name}, ${formatRupiah(bundle.price)}`}
+            title="Menunggu validasi bundle oleh service"
           >
             <Plus size={16} />
-            <span>Tambah</span>
+            <span>Menunggu service</span>
           </button>
         </div>
       </div>
@@ -470,6 +473,7 @@ function CheckoutModal({
   const total = subtotal - actualDiscount
   const [method, setMethod] = useState<'cash' | 'qris'>('cash')
   const [cash, setCash] = useState(0)
+  const [qrisConfirmed, setQrisConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const key = useRef(crypto.randomUUID())
@@ -501,7 +505,7 @@ function CheckoutModal({
   }
 
   const payQris = async () => {
-    if (busy) return
+    if (busy || !qrisConfirmed) return
     setBusy(true)
     setError('')
     try {
@@ -632,11 +636,15 @@ function CheckoutModal({
               </small>
             </div>
           )}
+          <label className="qris-manual-confirm">
+            <input type="checkbox" checked={qrisConfirmed} onChange={(event) => setQrisConfirmed(event.target.checked)} />
+            <span><b>Saya sudah memastikan pembayaran diterima</b><small>Konfirmasi ini dilakukan manual oleh kasir, bukan verifikasi bank atau payment gateway.</small></span>
+          </label>
           <div className="modal-actions">
             <button className="button secondary" onClick={close} disabled={busy}>
               Kembali
             </button>
-            <button className="button primary grow" onClick={payQris} disabled={busy}>
+            <button className="button primary grow" onClick={payQris} disabled={busy || !qrisConfirmed}>
               {busy ? (
                 <>
                   <span className="spinner" />
@@ -645,7 +653,7 @@ function CheckoutModal({
               ) : (
                 <>
                   <BadgeCheck size={20} />
-                  Konfirmasi Pembayaran QRIS
+                  Simpan QRIS yang dikonfirmasi kasir
                 </>
               )}
             </button>
@@ -693,7 +701,7 @@ function ReceiptModal({ service, transaction, shop, close }: { service: LocalPos
           ) : null}
           <div><span>Total</span><b>{formatRupiah(transaction.total)}</b></div>
           {transaction.paymentMethod === 'qris' ? (
-            <div><span>Metode</span><b className="qris-receipt-badge">QRIS (Lunas)</b></div>
+            <div><span>Metode</span><b className="qris-receipt-badge">QRIS dikonfirmasi kasir</b></div>
           ) : (
             <>
               <div><span>Tunai</span><b>{formatRupiah(transaction.cashReceived)}</b></div>
@@ -947,7 +955,6 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   const [pending, setPending] = useState<{ type: 'category' | 'product'; id: string; name: string } | null>(null)
   const [pendingBundleDelete, setPendingBundleDelete] = useState<PromoBundle | null>(null)
   const [error, setError] = useState('')
-  const [photo, setPhoto] = useState<string>('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [query, setQuery] = useState('')
 
@@ -967,55 +974,10 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
     })
   }, [data.bundles, query])
 
-  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setError('File harus berupa gambar (JPG, PNG, WebP).')
-      return
-    }
-    try {
-      const optimized = await optimizeImageFile(file, 640)
-      setPhoto(optimized)
-      setError('')
-    } catch {
-      setError('Gagal membaca gambar. Coba file lain.')
-    }
-  }
-
   const startEditProduct = (p: Product) => {
     setEditingProduct(p)
-    setPhoto(p.image || '')
     setError('')
     setKind('product')
-  }
-
-  const submitProduct = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); const f = new FormData(e.currentTarget)
-    try {
-      await service.saveProduct({
-        id: editingProduct ? editingProduct.id : undefined,
-        name: String(f.get('name')),
-        categoryId: String(f.get('category')),
-        description: String(f.get('description')),
-        accent: editingProduct?.accent ?? '#b8e5ff',
-        image: photo || '',
-        price: Number(f.get('price')),
-        stock: Number(f.get('stock')),
-        variants: [{
-          id: editingProduct?.variants[0]?.id,
-          name: editingProduct?.variants[0]?.name ?? 'Default',
-          price: Number(f.get('price')),
-          stock: Number(f.get('stock')),
-        }],
-      })
-      setPhoto('')
-      setEditingProduct(null)
-      setKind(null)
-      await refresh()
-    } catch (x) {
-      setError(messageOf(x))
-    }
   }
   const submitCategory = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -1023,7 +985,7 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
   }
   const confirmPending = async () => {
     if (!pending) return
-    try { if (pending.type === 'category') await service.deleteCategory(pending.id); else await service.deleteProduct(pending.id); setPending(null); await refresh() } catch (x) { setPending(null); setError(messageOf(x)) }
+    try { if (pending.type === 'category') await service.deleteCategory(pending.id); else await service.archiveProduct(pending.id); setPending(null); await refresh() } catch (x) { setPending(null); setError(messageOf(x)) }
   }
 
   return (
@@ -1035,7 +997,7 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
           viewMode === 'products' ? (
             <div className="action-row">
               <button className="button secondary" onClick={() => setKind('category')}><Plus />Kategori</button>
-              <button className="button primary" onClick={() => { setEditingProduct(null); setPhoto(''); setKind('product') }}><Plus />Produk baru</button>
+              <button className="button primary" onClick={() => { setEditingProduct(null); setKind('product') }}><Plus />Produk baru</button>
             </div>
           ) : (
             <button className="button primary" onClick={() => setBundleModal('new')}>
@@ -1210,8 +1172,8 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
                             <button className="button secondary small" onClick={() => startEditProduct(p)} aria-label={`Edit ${p.name}`}>
                               <Pencil size={15} />Edit
                             </button>
-                            <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Hapus ${p.name}`}>
-                              <Trash2 size={16} />Hapus
+                            <button className="button ghost small button-danger-ghost" onClick={() => setPending({ type: 'product', id: p.id, name: p.name })} aria-label={`Arsipkan ${p.name}`}>
+                              <Archive size={16} />Arsipkan
                             </button>
                           </div>
                         </td>
@@ -1373,39 +1335,12 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
       )}
 
       {kind === 'product' && (
-        <SimpleForm title={editingProduct ? `Edit ${editingProduct.name}` : 'Produk baru'} close={() => { setKind(null); setPhoto(''); setEditingProduct(null) }} submit={submitProduct}>
-          <div className="photo-upload-container">
-            <span className="photo-upload-label">Foto produk</span>
-            {photo ? (
-              <div className="photo-preview-box">
-                <img src={photo} alt="Pratinjau foto produk" className="photo-preview" />
-                <div className="photo-preview-actions">
-                  <label className="button secondary small change-photo-btn">
-                    <Upload size={15} /> Ganti foto
-                    <input type="file" accept="image/*" className="sr-only" onChange={handlePhotoSelect} />
-                  </label>
-                  <button type="button" className="button ghost small remove-photo-btn" onClick={() => setPhoto('')}>
-                    <Trash2 size={15} /> Hapus
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <label className="photo-dropzone">
-                <ImagePlus size={28} />
-                <span>Unggah foto produk</span>
-                <small>JPG, PNG, WebP (maks. 5MB)</small>
-                <input type="file" accept="image/*" className="sr-only" onChange={handlePhotoSelect} />
-              </label>
-            )}
-          </div>
-          <label>Nama produk<input name="name" autoFocus defaultValue={editingProduct?.name ?? ''} required placeholder="Contoh: Acrylic Keychain" /></label>
-          <label>Kategori<select name="category" defaultValue={editingProduct?.categoryId ?? data.categories.filter((x) => x.id !== 'all')[0]?.id} required>{data.categories.filter((x) => x.id !== 'all').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label>Deskripsi<input name="description" defaultValue={editingProduct?.description ?? ''} placeholder="Contoh: Art paper 260 gsm, laminasi doff" /></label>
-          <div className="form-grid form-grid-2">
-            <label>Harga (Rp)<input name="price" type="number" min="0" defaultValue={editingProduct?.variants[0]?.price ?? ''} placeholder="25000" required /></label>
-            <label>{editingProduct ? 'Jumlah stok' : 'Stok awal'}<input name="stock" type="number" min="0" defaultValue={editingProduct ? editingProduct.variants.reduce((s, v) => s + v.stock, 0) : ''} placeholder="10" required /></label>
-          </div>
-        </SimpleForm>
+        <ProductFormModal
+          product={editingProduct}
+          categories={data.categories.filter((category) => category.id !== 'all')}
+          close={() => { setKind(null); setEditingProduct(null) }}
+          save={async (value) => { await service.saveProduct(value); await refresh() }}
+        />
       )}
 
       {kind === 'category' && <SimpleForm title="Kategori baru" close={() => setKind(null)} submit={submitCategory}><label>Nama kategori<input name="name" autoFocus required /></label></SimpleForm>}
@@ -1422,7 +1357,7 @@ function ProductsPage({ data, service, refresh }: { data: BootstrapData; service
         />
       )}
 
-      {pending && <ConfirmDialog title={pending.type === 'category' ? `Hapus kategori ${pending.name}?` : `Hapus produk ${pending.name}?`} impact={pending.type === 'category' ? 'Kategori akan dihapus permanen. Kategori yang masih dipakai produk aktif tidak dapat dihapus.' : 'Produk akan dihapus dari katalog dan inventori. Catatan transaksi lama tetap aman tersimpan.'} confirmLabel={pending.type === 'category' ? 'Hapus kategori' : 'Hapus produk'} close={() => setPending(null)} confirm={confirmPending} />}
+      {pending && <ConfirmDialog title={pending.type === 'category' ? `Hapus kategori ${pending.name}?` : `Arsipkan produk ${pending.name}?`} impact={pending.type === 'category' ? 'Kategori akan dihapus permanen. Kategori yang masih dipakai produk aktif tidak dapat dihapus.' : 'Produk disembunyikan dari katalog dan kasir. Produk tidak dihapus sehingga referensi transaksi lama tetap aman. Pemulihan menunggu dukungan service.'} confirmLabel={pending.type === 'category' ? 'Hapus kategori' : 'Arsipkan produk'} close={() => setPending(null)} confirm={confirmPending} />}
 
       {pendingBundleDelete && (
         <ConfirmDialog
@@ -1620,7 +1555,6 @@ function StockPage({ data, service, refresh }: { data: BootstrapData; service: L
 }
 function EventsPage({ data, service, refresh, select }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; select: (id: string) => void }) {
   const [open, setOpen] = useState(false)
-  const [pendingDelete, setPendingDelete] = useState<BoothEvent | null>(null)
   const [error, setError] = useState('')
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
@@ -1641,23 +1575,6 @@ function EventsPage({ data, service, refresh, select }: { data: BootstrapData; s
     }
   }
 
-  const confirmDelete = async () => {
-    if (!pendingDelete) return
-    try {
-      const nextActiveId = await service.deleteEvent(pendingDelete.id)
-      if (nextActiveId) {
-        select(nextActiveId)
-      } else {
-        const remaining = data.events.filter((e) => e.id !== pendingDelete.id)
-        if (remaining[0]) select(remaining[0].id)
-      }
-      setPendingDelete(null)
-      await refresh()
-    } catch (err) {
-      setError(messageOf(err))
-    }
-  }
-
   return (
     <section className="admin-page">
       <PageTitle
@@ -1670,6 +1587,7 @@ function EventsPage({ data, service, refresh, select }: { data: BootstrapData; s
         }
       />
       {error && <Alert>{error}</Alert>}
+      <div className="alert success" role="status"><Archive size={20} />Event dan transaksi tidak lagi dapat dihapus dari UI. Tombol arsip/pulihkan akan aktif setelah kontrak service tersedia.</div>
       <div className="event-grid">
         {data.events.map((x) => {
           const isOnlyEvent = data.events.length <= 1
@@ -1701,13 +1619,12 @@ function EventsPage({ data, service, refresh, select }: { data: BootstrapData; s
                   <button
                     type="button"
                     className="button ghost small button-danger-ghost"
-                    disabled={isOnlyEvent}
-                    onClick={() => setPendingDelete(x)}
-                    aria-label={`Hapus event ${x.name}`}
-                    title={isOnlyEvent ? 'Minimal harus ada 1 event tersisa' : `Hapus event ${x.name}`}
+                    disabled
+                    aria-label={`Arsipkan event ${x.name}`}
+                    title={isOnlyEvent ? 'Event aktif tunggal tidak dapat diarsipkan' : 'Menunggu API arsip event dari service'}
                   >
-                    <Trash2 size={16} />
-                    <span>Hapus</span>
+                    <Archive size={16} />
+                    <span>Arsipkan</span>
                   </button>
                 </div>
               </div>
@@ -1721,15 +1638,6 @@ function EventsPage({ data, service, refresh, select }: { data: BootstrapData; s
           <label>Lokasi<input name="venue" placeholder="Contoh: ICE BSD Hall 10" /></label>
           <label>Tanggal / label<input name="date" placeholder="Contoh: 16-17 Okt 2026" required /></label>
         </SimpleForm>
-      )}
-      {pendingDelete && (
-        <ConfirmDialog
-          title={`Hapus event ${pendingDelete.name}?`}
-          impact={`Seluruh data transaksi (${data.transactions.filter((t) => t.eventId === pendingDelete.id).length} transaksi) dan laporan penjualan pada event ${pendingDelete.name} akan dihapus secara permanen. Stok produk barang tidak akan terpengaruh.`}
-          confirmLabel="Hapus event"
-          close={() => setPendingDelete(null)}
-          confirm={confirmDelete}
-        />
       )}
     </section>
   )
@@ -2010,68 +1918,6 @@ function ReportsPage({ data, service, eventId }: { data: BootstrapData; service:
 }
 function Metric({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint: string }) { return <article className="metric-card"><span>{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{hint}</small></div></article> }
 function MoreMenu({ navigate }: { navigate: (screen: Screen) => void }) { return <section className="admin-page mobile-more"><PageTitle eyebrow="Menu lainnya" title="Kelola booth" /><div className="more-grid">{NAV.slice(3).map(({ id, label, icon: Icon }) => <button key={id} onClick={() => navigate(id)}><Icon size={23} /><span>{label}</span></button>)}</div></section> }
-function TransactionsPage({ data, service, refresh, receipt }: { data: BootstrapData; service: LocalPosService; refresh: () => Promise<void>; receipt: (t: Transaction) => void }) {
-  const [target, setTarget] = useState<Transaction | null>(null); const [error, setError] = useState('')
-  const submit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); if (!target) return; const f = new FormData(e.currentTarget); try { await service.voidTransaction(target.id, String(f.get('reason'))); setTarget(null); await refresh() } catch (x) { setError(messageOf(x)) } }
-  return (
-    <section className="admin-page">
-      <PageTitle eyebrow="Jejak penjualan" title="Riwayat transaksi" />
-      {error && <Alert>{error}</Alert>}
-      <div className="table-card">
-        <table>
-          <thead>
-            <tr>
-              <th>Nomor</th>
-              <th>Waktu</th>
-              <th>Metode</th>
-              <th>Kasir</th>
-              <th>Total</th>
-              <th>Status</th>
-              <th>Aksi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.transactions.map((t) => (
-              <tr key={t.id}>
-                <td>
-                  <b>{t.number}</b>
-                  {t.voidReason && <small className="block void-reason">Alasan: {t.voidReason}</small>}
-                </td>
-                <td>{new Date(t.createdAt).toLocaleString('id-ID')}</td>
-                <td>
-                  <StatusPill tone={t.paymentMethod === 'qris' ? 'warning' : 'neutral'}>
-                    {t.paymentMethod === 'qris' ? 'QRIS' : 'Tunai'}
-                  </StatusPill>
-                </td>
-                <td>{t.cashierName}</td>
-                <td>{formatRupiah(t.total)}</td>
-                <td><StatusPill tone={t.status === 'void' ? 'danger' : 'success'}>{t.status === 'void' ? 'Batal' : 'Selesai'}</StatusPill></td>
-                <td>
-                  <div className="action-row">
-                    <button className="button ghost small" onClick={() => receipt(t)}><ReceiptText size={17} />Struk</button>
-                    {t.status !== 'void' && <button className="button danger small" onClick={() => setTarget(t)}>Batalkan</button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {target && (
-        <SimpleForm title={`Batalkan ${target.number}?`} danger close={() => setTarget(null)} submit={submit}>
-          <div className="confirm-impact">
-            <CircleAlert size={24} aria-hidden="true" />
-            <div>
-              <b>Transaksi akan dibatalkan</b>
-              <p>Stok seluruh item dikembalikan. Transaksi tetap ada di riwayat dengan alasan pembatalan dan tidak dihitung sebagai omzet.</p>
-            </div>
-          </div>
-          <label>Alasan pembatalan<input name="reason" autoFocus required minLength={3} placeholder="Contoh: salah pilih varian" /></label>
-        </SimpleForm>
-      )}
-    </section>
-  )
-}
 function SettingsPage({ service, settings, setSettings }: { service: LocalPosService; settings: ShopSettings; setSettings: (s: ShopSettings) => void }) {
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -2337,27 +2183,9 @@ export default function App({ service = posService }: { service?: LocalPosServic
     }
   }, [cart, appliedPromo, data?.bundles])
 
-  const availablePromo = useMemo(() => {
-    if (!data?.bundles?.length || !cart.length) return null
-    const activeBundles = data.bundles.filter((b) => b.active)
-    for (const b of activeBundles) {
-      if (appliedPromo?.id === b.id) continue
-      const satisfies = b.items.every((item) => {
-        const inCart = cart.find((c) => c.variantId === item.variantId)
-        return inCart && inCart.quantity >= item.quantity
-      })
-      if (satisfies) {
-        const regularPrice = b.items.reduce((s, it) => {
-          const inCart = cart.find((c) => c.variantId === it.variantId)
-          return s + (inCart?.price ?? 0) * it.quantity
-        }, 0)
-        if (regularPrice > b.price) {
-          return b
-        }
-      }
-    }
-    return null
-  }, [data?.bundles, cart, appliedPromo])
+  // Bundle checkout tetap nonaktif sampai service menerima bundleId dan menghitung
+  // validitas serta diskonnya sendiri. UI tidak pernah mengirim diskon bebas.
+  const availablePromo: PromoBundle | null = null
 
   if (boot === 'loading') return <div className="loading-screen"><BrandMark /><span className="spinner dark" /><p>Menyiapkan data offline…</p></div>
   if (boot === 'error') return <main className="loading-screen"><BrandMark /><Alert>{bootError || 'Data lokal tidak dapat dibuka.'}</Alert><button className="button primary" onClick={() => window.location.reload()}>Coba lagi</button></main>
