@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from './App'
@@ -66,13 +66,13 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
   })
 
   it('menampilkan transaksi tersimpan lagi saat aplikasi dirender ulang', async () => {
-    const next = await prepared(); const data = await next.getBootstrap(); const product = data.products[0]; const variant = product.variants.find((x) => x.stock > 0)!
+    const next = await prepared(); const data = await next.getBootstrap(); const product = data.products.find((candidate) => candidate.variants.some((variant) => variant.stock > 0))!; const variant = product.variants.find((x) => x.stock > 0)!
     await next.createTransaction({ eventId: data.events[0].id, items: [{ productId: product.id, variantId: variant.id, quantity: 1 }], cashReceived: variant.price, idempotencyKey: crypto.randomUUID() })
     await openTill(next); const user = userEvent.setup(); await user.click(screen.getAllByRole('button', { name: /^transaksi$/i })[0])
     await waitFor(() => expect(screen.getByText(/TRX-|CCF-/)).toBeInTheDocument())
   })
 
-  it('tambah produk memiliki upload foto dan tidak ada input varian', async () => {
+  it('tambah produk menyediakan mode sederhana satu varian Default', async () => {
     const next = await prepared(false)
     await next.saveCategory({ name: 'Merchandise' })
     await openTill(next)
@@ -84,7 +84,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     await user.click(screen.getByRole('button', { name: /produk baru/i }))
     expect(await screen.findByRole('heading', { name: /produk baru/i })).toBeInTheDocument()
 
-    expect(screen.queryByLabelText(/varian/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /sederhana/i })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText(/unggah foto produk/i)).toBeInTheDocument()
 
     await user.type(screen.getByLabelText(/nama produk/i), 'Stiker Hologram')
@@ -104,7 +104,40 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByRole('button', { name: /tambah stiker hologram/i })).toBeInTheDocument()
   })
 
-  it('dapat menghapus produk dan menghilangkannya dari daftar serta kasir', async () => {
+  it('dapat membuat, mengurutkan, dan menyimpan produk multi-varian', async () => {
+    const next = await prepared(false)
+    await next.saveCategory({ name: 'Print' })
+    await openTill(next)
+    const user = userEvent.setup()
+
+    await user.click(screen.getAllByRole('button', { name: /^produk$/i })[0])
+    await user.click(screen.getByRole('button', { name: /produk baru/i }))
+    await user.type(screen.getByLabelText(/nama produk/i), 'Print Karakter')
+    await user.click(screen.getByRole('button', { name: /multi-varian/i }))
+
+    await user.type(screen.getByLabelText('Nama varian 1'), 'A5')
+    await user.clear(screen.getByLabelText('Harga varian 1'))
+    await user.type(screen.getByLabelText('Harga varian 1'), '25000')
+    await user.clear(screen.getByLabelText('Stok varian 1'))
+    await user.type(screen.getByLabelText('Stok varian 1'), '5')
+    await user.type(screen.getByLabelText('SKU varian 1'), 'PRINT-A5')
+    await user.click(screen.getByRole('button', { name: /tambah varian/i }))
+    await user.type(screen.getByLabelText('Nama varian 2'), 'A4')
+    await user.clear(screen.getByLabelText('Harga varian 2'))
+    await user.type(screen.getByLabelText('Harga varian 2'), '40000')
+    await user.clear(screen.getByLabelText('Stok varian 2'))
+    await user.type(screen.getByLabelText('Stok varian 2'), '3')
+    await user.click(screen.getByRole('button', { name: /naikkan varian 2/i }))
+    await user.click(screen.getByRole('button', { name: /^simpan$/i }))
+
+    await waitFor(async () => {
+      const saved = (await next.getBootstrap()).products.find((product) => product.name === 'Print Karakter')
+      expect(saved?.variants.map((variant) => variant.name)).toEqual(['A4', 'A5'])
+      expect(saved?.variants[1].sku).toBe('PRINT-A5')
+    })
+  })
+
+  it('mengarsipkan produk tanpa menghapus record historis', async () => {
     const next = await prepared(false)
     const category = await next.saveCategory({ name: 'Prints' })
     await next.saveProduct({ name: 'Poster Keren', categoryId: category.id, price: 50000, stock: 5 })
@@ -115,12 +148,13 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(await screen.findByRole('heading', { name: /produk & kategori/i })).toBeInTheDocument()
     expect(screen.getByText('Poster Keren')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /hapus poster keren/i }))
-    expect(await screen.findByRole('dialog', { name: /hapus produk poster keren\?/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /arsipkan poster keren/i }))
+    expect(await screen.findByRole('dialog', { name: /arsipkan produk poster keren\?/i })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /^hapus produk$/i }))
+    await user.click(screen.getByRole('button', { name: /^arsipkan produk$/i }))
 
     await waitFor(() => expect(screen.queryByText('Poster Keren')).not.toBeInTheDocument())
+    expect((await next.db.products.toArray()).find((product) => product.name === 'Poster Keren')).toMatchObject({ archived: true })
   })
 
   it('menampilkan indikator stok menipis pada kartu kasir dan tabel produk', async () => {
@@ -186,11 +220,14 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
 
     // Pilih tab QRIS
     await user.click(screen.getByRole('tab', { name: /qris/i }))
-    expect(screen.getByRole('button', { name: /konfirmasi pembayaran qris/i })).toBeInTheDocument()
+    const confirm = screen.getByRole('button', { name: /simpan qris yang dikonfirmasi kasir/i })
+    expect(confirm).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /sudah memastikan pembayaran diterima/i }))
+    expect(confirm).toBeEnabled()
 
-    await user.click(screen.getByRole('button', { name: /konfirmasi pembayaran qris/i }))
+    await user.click(confirm)
     expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
-    expect(screen.getByText(/qris \(lunas\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/qris dikonfirmasi kasir/i)).toBeInTheDocument()
   })
 
   it('dapat memfilter produk berdasarkan kategori yang diklik pada menu Produk', async () => {
@@ -283,7 +320,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.queryByRole('cell', { name: /sticker pack chibi/i })).not.toBeInTheDocument()
   })
 
-  it('dapat menambah promo bundle di kasir, menghitung diskon dan mencantumkannya di struk', async () => {
+  it('tidak menerapkan bundle sebelum service memvalidasi bundleId', async () => {
     const next = await prepared(false)
     const cat = await next.saveCategory({ name: 'Merch' })
     const p1 = await next.saveProduct({ name: 'Gantungan Akrilik', categoryId: cat.id, price: 30000, stock: 10 })
@@ -298,30 +335,12 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
       active: true,
     })
     await openTill(next)
-    const user = userEvent.setup()
-
     expect(screen.getByText('Bundle Hemat Wibu')).toBeInTheDocument()
     expect(screen.getByText('Hemat Rp 10.000')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /tambah bundle hemat wibu/i }))
-
-    expect(screen.getByText('Bundle Hemat Wibu', { selector: '.cart-promo-info b' })).toBeInTheDocument()
-    expect(screen.getByText('Hemat Rp 10.000', { selector: '.cart-promo-info small' })).toBeInTheDocument()
-    expect(screen.getByText('-Rp 10.000', { selector: '.discount-row span:last-child' })).toBeInTheDocument()
-    expect(screen.getByText('Rp 45.000', { selector: '.grand-total strong' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /bayar sekarang/i }))
-    const checkoutModal = screen.getByRole('dialog', { name: /pembayaran/i })
-    expect(within(checkoutModal).getByText(/diskon rp 10\.000/i)).toBeInTheDocument()
-    expect(within(checkoutModal).getByText('Rp 45.000', { selector: '.checkout-total strong' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /uang pas/i }))
-    await user.click(screen.getByRole('button', { name: /simpan pembayaran/i }))
-
-    expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
-    expect(screen.getByText(/subtotal/i)).toBeInTheDocument()
-    expect(screen.getByText(/-Rp 10\.000/i)).toBeInTheDocument()
-    expect(screen.getAllByText('Rp 45.000', { selector: '.receipt-totals b' }).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByRole('button', { name: /tambah bundle hemat wibu/i })).toBeDisabled()
+    expect(screen.queryByText('Bundle Hemat Wibu', { selector: '.cart-promo-info b' })).not.toBeInTheDocument()
+    expect((await next.getBootstrap()).transactions).toHaveLength(0)
   })
 
   it('dapat berpindah ke tab Promo Bundle di menu Produk dan membuat bundle baru', async () => {
@@ -389,7 +408,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(screen.getByText('Tabel Evaluasi Komparasi Seluruh Event')).toBeInTheDocument()
   })
 
-  it('dapat menghapus event dari menu Pengelolaan Event', async () => {
+  it('tidak menawarkan penghapusan event sambil menunggu kontrak arsip service', async () => {
     const next = await prepared(false)
     await next.saveEvent({ name: 'ChibiCon 2026', venue: 'Balai Kartini', dateLabel: '20 Des 2026' })
     await openTill(next)
@@ -399,17 +418,9 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
     expect(await screen.findByRole('heading', { name: /pengelolaan event/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'ChibiCon 2026' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /hapus event chibicon 2026/i }))
-
-    expect(await screen.findByRole('dialog', { name: /hapus event chibicon 2026\?/i })).toBeInTheDocument()
-    expect(screen.getByText(/seluruh data transaksi/i)).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /hapus event$/i }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: /hapus event chibicon 2026\?/i })).not.toBeInTheDocument()
-    })
-    expect(screen.queryByRole('heading', { name: 'ChibiCon 2026' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /hapus event/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /arsipkan event chibicon 2026/i })).toBeDisabled()
+    expect(screen.getByRole('heading', { name: 'ChibiCon 2026' })).toBeInTheDocument()
   })
 })
 
