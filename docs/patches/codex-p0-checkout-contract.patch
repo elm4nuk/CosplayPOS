@@ -1,5 +1,5 @@
 diff --git a/src/App.test.tsx b/src/App.test.tsx
-index 5f52535..b74534c 100644
+index 5f52535..8b09940 100644
 --- a/src/App.test.tsx
 +++ b/src/App.test.tsx
 @@ -190,7 +190,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
@@ -18,6 +18,16 @@ index 5f52535..b74534c 100644
 +      paymentConfirmed: true,
        idempotencyKey: crypto.randomUUID(),
      })
+ 
+@@ -409,7 +410,8 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
+     await waitFor(() => {
+       expect(screen.queryByRole('dialog', { name: /hapus event chibicon 2026\?/i })).not.toBeInTheDocument()
+     })
+-    expect(screen.queryByRole('heading', { name: 'ChibiCon 2026' })).not.toBeInTheDocument()
++    // The dialog closes before refresh() resolves; wait for the list to update.
++    await waitFor(() => expect(screen.queryByRole('heading', { name: 'ChibiCon 2026' })).not.toBeInTheDocument())
+   })
+ })
  
 diff --git a/src/App.tsx b/src/App.tsx
 index c27bcab..b17f534 100644
