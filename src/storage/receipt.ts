@@ -54,7 +54,9 @@ export function formatReceiptText(tx: Transaction, settings: ReceiptSettings, wi
   }
   lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width))
   if (tx.paymentMethod === 'qris') {
-    lines.push(row('Metode', 'QRIS (Lunas)', width))
+    // No gateway exists: the cashier looked at the customer's payment screen. Never print "verified".
+    lines.push(row('Metode', tx.paymentStatus === 'legacy' ? 'QRIS (data lama)' : 'QRIS — dikonfirmasi kasir', width))
+    if (tx.paymentReference) lines.push(row('Ref', tx.paymentReference, width))
   } else {
     lines.push(row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
   }
