@@ -515,6 +515,7 @@ function CheckoutModal({
           items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })),
           cashReceived: total,
           paymentMethod: 'qris',
+          paymentConfirmed: true,
           discount: actualDiscount,
           promoName,
           idempotencyKey: key.current,

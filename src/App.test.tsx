@@ -390,6 +390,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
       items: [{ productId: prod.id, variantId: prod.variants[0].id, quantity: 3 }],
       cashReceived: 150000,
       paymentMethod: 'qris',
+      paymentConfirmed: true,
       idempotencyKey: crypto.randomUUID(),
     })
 
