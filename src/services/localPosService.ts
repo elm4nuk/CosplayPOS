@@ -1,5 +1,5 @@
 import { createBackup, parseBackup, restoreBackup, type BackupFile } from '../storage/backup'
-import { PosDatabase, type BundleRow, type CategoryRow, type EventRow, type ImageRow, type ProductRow, type StockMovementRow, type TransactionRow, type VariantRow } from '../storage/db'
+import { PosDatabase, type BundleRow, type CashSessionRow, type CategoryRow, type EventRow, type ImageRow, type ProductRow, type StockMovementRow, type TransactionRow, type VariantRow } from '../storage/db'
 import { csvFileName, localDateTime, toCsv } from '../storage/csv'
 import { PosError } from '../storage/errors'
 import { checkImageDataUrl } from '../storage/images'
@@ -112,6 +112,47 @@ export type TransactionFilter = {
 }
 
 export type CsvExport = { fileName: string; content: string; rowCount: number }
+
+/** A variant is "stok menipis" when `stock <= (lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD)`. */
+export const DEFAULT_LOW_STOCK_THRESHOLD = 3
+
+export type LowStockItem = { productId: string; productName: string; variantId: string; variantName: string; stock: number; threshold: number; outOfStock: boolean }
+
+export type StockCountInput = {
+  /** `expected` = stock shown when counting started; if it moved since (a sale), the count is refused. */
+  counts: { productId: string; variantId: string; counted: number; expected?: number }[]
+  note: string
+}
+export type StockCountResult = {
+  adjusted: { productId: string; variantId: string; productName: string; variantName: string; before: number; counted: number; delta: number }[]
+  unchanged: number
+}
+
+/**
+ * Cash drawer session. While one is open every sale is tagged with its id.
+ * `cashSales` = completed cash sales tagged with the session (voids excluded);
+ * `expectedCash` = openingCash + cashSales. Live while open, frozen at close.
+ */
+export type CashSession = {
+  id: string
+  status: 'open' | 'closed'
+  eventId: string
+  openedAt: string
+  openedBy: string
+  openingCash: number
+  openingNote: string
+  cashSales: number
+  cashTransactionCount: number
+  /** QRIS sales in the same session, for the summary only (not in the drawer). */
+  qrisSales: number
+  expectedCash: number
+  closedAt?: string
+  closedBy?: string
+  countedCash?: number
+  /** countedCash - expectedCash. Negative = kurang, positive = lebih. */
+  difference?: number
+  closingNote?: string
+}
 
 export type LocalServiceOptions = {
   dbName?: string
@@ -251,6 +292,24 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
     const inBundle = (await db.bundles.toArray()).some((b) => b.items.some((i) => i.productId === productId && touches(i.variantId)))
     if (inBundle) return true
     return (await db.transactions.filter((t) => t.items.some((i) => i.productId === productId && touches(i.variantId))).count()) > 0
+  }
+
+  async function sessionTotals(sessionId: string) {
+    const done = await db.transactions.where('cashSessionId').equals(sessionId).filter((t) => t.status === 'completed').toArray()
+    const cash = done.filter((t) => (t.paymentMethod ?? 'cash') === 'cash')
+    return { cashSales: cash.reduce((sum, t) => sum + t.total, 0), cashTransactionCount: cash.length, qrisSales: done.filter((t) => t.paymentMethod === 'qris').reduce((sum, t) => sum + t.total, 0) }
+  }
+
+  async function toCashSession(row: CashSessionRow): Promise<CashSession> {
+    const live = await sessionTotals(row.id)
+    const closed = row.status === 'closed'
+    const cashSales = closed ? row.cashSales ?? live.cashSales : live.cashSales
+    return {
+      id: row.id, status: row.status, eventId: row.eventId, openedAt: row.openedAt, openedBy: row.openedBy, openingCash: row.openingCash, openingNote: row.openingNote,
+      cashSales, cashTransactionCount: closed ? row.transactionCount ?? live.cashTransactionCount : live.cashTransactionCount, qrisSales: live.qrisSales,
+      expectedCash: closed ? row.expectedCash ?? row.openingCash + cashSales : row.openingCash + cashSales,
+      ...(closed ? { closedAt: row.closedAt, closedBy: row.closedBy, countedCash: row.countedCash, difference: row.difference, closingNote: row.closingNote } : {}),
+    }
   }
 
   async function maybeAutoBackup(seq: number) {
@@ -862,6 +921,117 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
         ['Produk terlaris', 'Jumlah', 'Nilai (sebelum diskon)'], ...r.topProducts.map((p) => [p.productName, p.quantity, p.revenue]),
       ]
       return { fileName: csvFileName(`laporan-${event.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'event'}`, now()), content: toCsv(rows), rowCount: r.transactionCount }
+    },
+
+    /** Opens the cash drawer session. Only one can be open; it belongs to the active event unless `eventId` is given. */
+    async openCashSession(input: { openingCash: number; note?: string; eventId?: string }): Promise<CashSession> {
+      await ready()
+      const actor = (await settings()).defaultCashier
+      const openingCash = rupiah(input.openingCash, 'Saldo awal')
+      const row = await db.transaction('rw', db.cashSessions, db.meta, db.events, async () => {
+        const open = await db.cashSessions.where('status').equals('open').first()
+        if (open) fail('CASH_SESSION_OPEN', 'Masih ada sesi kas yang terbuka. Tutup dulu sebelum membuka yang baru.', { sessionId: open.id })
+        const eventId = input.eventId ?? (await activeEventId()) ?? fail('EVENT_NOT_FOUND', 'Tidak ada event aktif.')
+        const event = (await db.events.get(eventId)) ?? fail('EVENT_NOT_FOUND', 'Event tidak ditemukan.')
+        if (event.archived) fail('EVENT_ARCHIVED', `Event ${event.name} sudah diarsipkan.`)
+        const session: CashSessionRow = { id: uuid(), status: 'open', eventId, openedAt: now().toISOString(), openedBy: actor, openingCash, openingNote: input.note?.trim() ?? '' }
+        await db.cashSessions.add(session)
+        return session
+      })
+      return toCashSession(row)
+    },
+
+    /** Closes the open session with the cash actually counted and freezes its totals. */
+    async closeCashSession(input: { countedCash: number; note?: string }): Promise<CashSession> {
+      await ready()
+      const actor = (await settings()).defaultCashier
+      const countedCash = rupiah(input.countedCash, 'Uang aktual')
+      const row = await db.transaction('rw', db.cashSessions, db.transactions, async () => {
+        const open = (await db.cashSessions.where('status').equals('open').first()) ?? fail('CASH_SESSION_NOT_OPEN', 'Tidak ada sesi kas yang terbuka.')
+        const totals = await sessionTotals(open.id)
+        const expectedCash = open.openingCash + totals.cashSales
+        const closed: CashSessionRow = {
+          ...open, status: 'closed', closedAt: now().toISOString(), closedBy: actor, cashSales: totals.cashSales, transactionCount: totals.cashTransactionCount,
+          expectedCash, countedCash, difference: countedCash - expectedCash, closingNote: input.note?.trim() ?? '',
+        }
+        await db.cashSessions.put(closed)
+        return closed
+      })
+      return toCashSession(row)
+    },
+
+    async getOpenCashSession(): Promise<CashSession | null> {
+      await ready()
+      const open = await db.cashSessions.where('status').equals('open').first()
+      return open ? toCashSession(open) : null
+    },
+
+    async listCashSessions(): Promise<CashSession[]> {
+      await ready()
+      return Promise.all((await db.cashSessions.orderBy('openedAt').reverse().toArray()).map(toCashSession))
+    },
+
+    /**
+     * Stock opname: sets each counted variant to the physical count in one
+     * transaction, with an `opname` movement per difference. Archived products
+     * can be counted too.
+     */
+    async recordStockCount(input: StockCountInput): Promise<StockCountResult> {
+      await ready()
+      const actor = (await settings()).defaultCashier
+      const note = text(input.note, 'Catatan stock opname')
+      if (!input.counts?.length) fail('VALIDATION', 'Isi minimal satu hitungan stok.')
+      const seen = new Set<string>()
+      for (const c of input.counts) {
+        rupiah(c.counted, 'Jumlah hitung')
+        if (c.expected !== undefined) rupiah(c.expected, 'Stok tercatat')
+        if (seen.has(c.variantId)) fail('VALIDATION', 'Varian yang sama dihitung dua kali.')
+        seen.add(c.variantId)
+      }
+      return db.transaction('rw', db.products, db.stockMovements, async () => {
+        const products = new Map((await db.products.bulkGet([...new Set(input.counts.map((c) => c.productId))])).filter(present).map((p) => [p.id, p]))
+        const drift: { variantId: string; expected: number; actual: number }[] = []
+        const timestamp = now().toISOString()
+        const result: StockCountResult = { adjusted: [], unchanged: 0 }
+        const movements: StockMovementRow[] = []
+        for (const c of input.counts) {
+          const product = products.get(c.productId) ?? fail('NOT_FOUND', 'Produk tidak ditemukan.', { productId: c.productId })
+          const variant = product.variants.find((v) => v.id === c.variantId) ?? fail('NOT_FOUND', 'Varian tidak ditemukan.', { variantId: c.variantId })
+          if (c.expected !== undefined && c.expected !== variant.stock) { drift.push({ variantId: c.variantId, expected: c.expected, actual: variant.stock }); continue }
+          const delta = c.counted - variant.stock
+          if (delta === 0) { result.unchanged += 1; continue }
+          result.adjusted.push({ productId: product.id, variantId: variant.id, productName: product.name, variantName: variant.name, before: variant.stock, counted: c.counted, delta })
+          variant.stock = c.counted
+          movements.push({ id: uuid(), kind: 'opname', productId: product.id, variantId: variant.id, productName: product.name, variantName: variant.name, delta, stockAfter: c.counted, reason: `Stock opname: ${note}`, actor, createdAt: timestamp })
+        }
+        if (drift.length) fail('STOCK_CHANGED', 'Stok berubah sejak mulai menghitung (ada penjualan). Hitung ulang varian yang ditandai.', { drift })
+        await db.products.bulkPut([...products.values()].filter((p) => result.adjusted.some((a) => a.productId === p.id)).map((p) => ({ ...p, updatedAt: timestamp })))
+        if (movements.length) await db.stockMovements.bulkAdd(movements)
+        return result
+      })
+    },
+
+    /** Live variants at or below their threshold, sold-out first. */
+    async getLowStock(): Promise<LowStockItem[]> {
+      await ready()
+      const products = (await db.products.toArray()).filter((p) => !p.archived)
+      return products.flatMap((p) => p.variants.filter((v) => !v.archived).map((v) => {
+        const threshold = v.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD
+        return { productId: p.id, productName: p.name, variantId: v.id, variantName: v.name, stock: v.stock, threshold, outOfStock: v.stock === 0 }
+      })).filter((v) => v.stock <= v.threshold).sort((a, b) => a.stock - b.stock || a.productName.localeCompare(b.productName))
+    },
+
+    /** `null` returns the variant to DEFAULT_LOW_STOCK_THRESHOLD. A setting, not a stock change: no movement row. */
+    async setLowStockThreshold(productId: string, variantId: string, threshold: number | null) {
+      await ready()
+      const value = threshold === null ? undefined : rupiah(threshold, 'Batas stok menipis')
+      await db.transaction('rw', db.products, async () => {
+        const product = (await db.products.get(productId)) ?? fail('NOT_FOUND', 'Produk tidak ditemukan.')
+        const variant = product.variants.find((v) => v.id === variantId) ?? fail('NOT_FOUND', 'Varian tidak ditemukan.')
+        if (value === undefined) delete variant.lowStockThreshold
+        else variant.lowStockThreshold = value
+        await db.products.put({ ...product, updatedAt: now().toISOString() })
+      })
     },
 
     async getReceiptText(transactionId: string) {

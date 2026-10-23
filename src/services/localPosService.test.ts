@@ -622,3 +622,91 @@ describe('filter transaksi dan export CSV', () => {
     expect(await code(service.exportEventReportCsv('tidak-ada'))).toBe('EVENT_NOT_FOUND')
   })
 })
+
+describe('sesi kas', () => {
+  it('menghitung omzet tunai, uang seharusnya, dan selisih; void dikecualikan; QRIS terpisah', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    await service.adjustStock(product.id, a5.id, 10, 'Restock')
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    expect(await service.getOpenCashSession()).toBeNull()
+
+    clock = new Date('2026-10-17T11:00:00+07:00')
+    const opened = await service.openCashSession({ openingCash: 200000, note: 'Modal kembalian' })
+    expect(opened).toMatchObject({ status: 'open', eventId, openingCash: 200000, cashSales: 0, expectedCash: 200000, openedBy: 'Kasir Demo' })
+    expect(await code(service.openCashSession({ openingCash: 0 }))).toBe('CASH_SESSION_OPEN')
+
+    const s1 = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2)], cashReceived: 100000 })
+    const s2 = await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true })
+    const s3 = await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    await service.voidTransaction(s3.id, 'Batal')
+    expect(s1.cashSessionId).toBe(opened.id); expect(s2.cashSessionId).toBe(opened.id)
+    expect(await service.getOpenCashSession()).toMatchObject({ cashSales: 50000, cashTransactionCount: 1, qrisSales: 40000, expectedCash: 250000 })
+    expect(await code(service.archiveEvent(eventId, { replacementEventId: (await service.saveEvent({ name: 'Lain' })).id }))).toBe('CASH_SESSION_OPEN')
+
+    clock = new Date('2026-10-17T20:00:00+07:00')
+    const closed = await service.closeCashSession({ countedCash: 245000, note: 'Kurang 5rb' })
+    expect(closed).toMatchObject({ status: 'closed', cashSales: 50000, expectedCash: 250000, countedCash: 245000, difference: -5000, closingNote: 'Kurang 5rb', closedBy: 'Kasir Demo' })
+    expect(closed.closedAt).toBe(clock.toISOString())
+    expect(await code(service.closeCashSession({ countedCash: 0 }))).toBe('CASH_SESSION_NOT_OPEN')
+
+    // A void after closing does not rewrite what was counted.
+    await service.voidTransaction(s1.id, 'Retur besok')
+    expect((await service.listCashSessions())[0]).toMatchObject({ cashSales: 50000, expectedCash: 250000, difference: -5000 })
+    expect((await service.listTransactions({ cashSessionId: opened.id })).map((t) => t.id).sort()).toEqual([s1.id, s2.id, s3.id].sort())
+    // Sales after closing are not tagged.
+    expect((await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })).cashSessionId).toBeUndefined()
+  })
+
+  it('validasi input sesi kas dan sesi kas ikut backup', async () => {
+    const { eventId } = await seeded()
+    expect(await code(service.openCashSession({ openingCash: -1 }))).toBe('VALIDATION')
+    expect(await code(service.openCashSession({ openingCash: 1.5 }))).toBe('VALIDATION')
+    const ev2 = await service.saveEvent({ name: 'Arsip' }); await service.archiveEvent(ev2.id)
+    expect(await code(service.openCashSession({ openingCash: 0, eventId: ev2.id }))).toBe('EVENT_ARCHIVED')
+    await service.openCashSession({ openingCash: 50000, eventId })
+    const backup = await service.exportBackup()
+    expect(backup.counts.cashSessions).toBe(1)
+    const fresh = open(`${dbName}-cash`); extraServices.push(fresh); await fresh.ready(); await fresh.restoreBackup(JSON.stringify(backup))
+    expect(await fresh.getOpenCashSession()).toMatchObject({ openingCash: 50000, status: 'open' })
+  })
+})
+
+describe('stock opname dan stok menipis per varian', () => {
+  it('opname menyetel stok ke hitungan fisik secara atomik dengan riwayat opname', async () => {
+    const { product, a5, a4 } = await seeded()
+    clock = new Date('2026-10-17T21:00:00+07:00')
+    const result = await service.recordStockCount({ note: 'Akhir hari 1', counts: [{ productId: product.id, variantId: a5.id, counted: 1, expected: 3 }, { productId: product.id, variantId: a4.id, counted: 1, expected: 1 }] })
+    expect(result).toEqual({ adjusted: [{ productId: product.id, variantId: a5.id, productName: 'Print Cosmic', variantName: 'A5', before: 3, counted: 1, delta: -2 }], unchanged: 1 })
+    expect(await stockOf(a5.id)).toBe(1)
+    const move = await service.db.stockMovements.where('variantId').equals(a5.id).filter((m) => m.kind === 'opname').first()
+    expect(move).toMatchObject({ delta: -2, stockAfter: 1, reason: 'Stock opname: Akhir hari 1', actor: 'Kasir Demo' })
+    expect((await service.getBootstrap()).stockAdjustments[0]).toMatchObject({ kind: 'opname', delta: -2 })
+  })
+
+  it('opname ditolak seluruhnya bila stok bergeser sejak mulai menghitung atau input tidak valid', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    const err = await failure(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: 0, expected: 1 }, { productId: product.id, variantId: a5.id, counted: 0, expected: 3 }] }))
+    expect(err).toMatchObject({ code: 'STOCK_CHANGED', details: { drift: [{ variantId: a5.id, expected: 3, actual: 2 }] } })
+    expect(await stockOf(a4.id)).toBe(1)
+    expect(await code(service.recordStockCount({ note: ' ', counts: [{ productId: product.id, variantId: a4.id, counted: 0 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: -1 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: 0 }, { productId: product.id, variantId: a4.id, counted: 1 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: 'hilang', counted: 0 }] }))).toBe('NOT_FOUND')
+  })
+
+  it('batas stok menipis per varian, default 3, habis didahulukan', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.stock, v.threshold, v.outOfStock])).toEqual([[a4.id, 1, 3, false], [a5.id, 3, 3, false]])
+    await service.setLowStockThreshold(product.id, a5.id, 2)
+    await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 40000 })
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.outOfStock])).toEqual([[a4.id, true]])
+    expect((await service.getBootstrap()).products[0].variants.find((v) => v.id === a5.id)?.lowStockThreshold).toBe(2)
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000, lowStockThreshold: 5 }, { id: a4.id, price: 40000 }] })
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.threshold])).toEqual([[a4.id, 3], [a5.id, 5]])
+    await service.setLowStockThreshold(product.id, a5.id, null)
+    expect((await service.db.products.get(product.id))?.variants.find((v) => v.id === a5.id)?.lowStockThreshold).toBeUndefined()
+    expect(await code(service.setLowStockThreshold(product.id, a5.id, -1))).toBe('VALIDATION')
+    expect(await service.db.stockMovements.filter((m) => m.reason.includes('menipis')).count()).toBe(0)
+  })
+})
