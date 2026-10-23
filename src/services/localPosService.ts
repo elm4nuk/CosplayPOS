@@ -1,5 +1,6 @@
 import { createBackup, parseBackup, restoreBackup, type BackupFile } from '../storage/backup'
 import { PosDatabase, type BundleRow, type CategoryRow, type EventRow, type ImageRow, type ProductRow, type StockMovementRow, type TransactionRow, type VariantRow } from '../storage/db'
+import { csvFileName, localDateTime, toCsv } from '../storage/csv'
 import { PosError } from '../storage/errors'
 import { checkImageDataUrl } from '../storage/images'
 import { formatReceiptText } from '../storage/receipt'
@@ -95,6 +96,23 @@ export type EventComparisonReport = {
   }
 }
 
+export type TransactionFilter = {
+  eventId?: string
+  /** Inclusive lower bound on `createdAt` (any string `Date` parses; compared in UTC). */
+  from?: string
+  /** Exclusive upper bound on `createdAt`. For "one local day" pass local midnight → next local midnight. */
+  to?: string
+  paymentMethod?: 'cash' | 'qris'
+  status?: 'completed' | 'void'
+  /** Case-insensitive part of the receipt number, e.g. `0042`. */
+  number?: string
+  cashSessionId?: string
+  /** Newest first; default no limit. */
+  limit?: number
+}
+
+export type CsvExport = { fileName: string; content: string; rowCount: number }
+
 export type LocalServiceOptions = {
   dbName?: string
   now?: () => Date
@@ -114,6 +132,12 @@ const text = (value: unknown, label: string) => (typeof value === 'string' && va
 const rupiah = (value: unknown, label: string) => (Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail('VALIDATION', `${label} harus bilangan bulat rupiah ≥ 0.`))
 const uuid = () => crypto.randomUUID()
 const present = <T,>(value: T | undefined): value is T => value !== undefined
+
+function isoBound(value: string | undefined, label: string) {
+  if (value === undefined || value === '') return undefined
+  const time = Date.parse(value)
+  return Number.isNaN(time) ? fail('VALIDATION', `${label} bukan tanggal yang valid.`) : new Date(time).toISOString()
+}
 
 /**
  * QRIS note: free text for the cashier's own matching (e.g. last digits shown
@@ -775,6 +799,69 @@ export function createLocalPosService(options: LocalServiceOptions = {}) {
           overallTopProducts: [...productAgg.values()].sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue).slice(0, 5),
         },
       }
+    },
+
+    /** Newest first. Every filter is optional and they combine with AND. */
+    async listTransactions(filter: TransactionFilter = {}): Promise<Transaction[]> {
+      await ready()
+      const from = isoBound(filter.from, 'Tanggal awal')
+      const to = isoBound(filter.to, 'Tanggal akhir')
+      if (from && to && from >= to) fail('VALIDATION', 'Tanggal awal harus sebelum tanggal akhir.')
+      if (filter.limit !== undefined && (!Number.isSafeInteger(filter.limit) || filter.limit < 1)) fail('VALIDATION', 'Batas jumlah harus bilangan bulat ≥ 1.')
+      const number = filter.number?.trim().toLowerCase()
+      return db.transaction('r', db.transactions, db.products, async () => {
+        const base = filter.eventId ? db.transactions.where('eventId').equals(filter.eventId)
+          : filter.cashSessionId ? db.transactions.where('cashSessionId').equals(filter.cashSessionId)
+            : from || to ? db.transactions.where('createdAt').between(from ?? '', to ?? '￿', true, false)
+              : db.transactions.toCollection()
+        const rows = (await base.filter((t) =>
+          (!from || t.createdAt >= from) && (!to || t.createdAt < to)
+          && (!filter.eventId || t.eventId === filter.eventId)
+          && (!filter.cashSessionId || t.cashSessionId === filter.cashSessionId)
+          && (!filter.paymentMethod || (t.paymentMethod ?? 'cash') === filter.paymentMethod)
+          && (!filter.status || t.status === filter.status)
+          && (!number || t.number.toLowerCase().includes(number)),
+        ).toArray()).sort((a, b) => b.seq - a.seq).slice(0, filter.limit)
+        const stockOf = stockMap((await db.products.bulkGet([...new Set(rows.flatMap((t) => t.items.map((i) => i.productId)))])).filter(present))
+        return rows.map((t) => toTransaction(t, stockOf))
+      })
+    },
+
+    /**
+     * Transactions matching `filter` as CSV. `perItem: false` (default) = one row
+     * per transaction; `true` = one row per sold line. Save with
+     * `saveToDevice(fileName, content, 'text/csv')`.
+     */
+    async exportTransactionsCsv(filter: TransactionFilter = {}, opts: { perItem?: boolean } = {}): Promise<CsvExport> {
+      const txs = (await service.listTransactions(filter)).reverse()
+      const events = new Map((await db.events.toArray()).map((e) => [e.id, e.name]))
+      const head = ['Nomor', 'Waktu', 'Waktu (UTC)', 'Event', 'Status', 'Metode', 'Status bayar', 'Ref QRIS', 'Kasir']
+      const money = (t: Transaction) => [t.subtotal ?? t.total, t.discount ?? 0, t.promoName ?? '', t.total, t.cashReceived, t.change, t.voidReason ?? '', t.voidedAt ? localDateTime(t.voidedAt) : '']
+      const moneyHead = ['Subtotal', 'Diskon', 'Promo', 'Total', 'Diterima', 'Kembalian', 'Alasan batal', 'Waktu batal']
+      const info = (t: Transaction) => [t.number, localDateTime(t.createdAt), t.createdAt, events.get(t.eventId) ?? t.eventId, t.status === 'void' ? 'Batal' : 'Selesai', t.paymentMethod === 'qris' ? 'QRIS' : 'Tunai', t.paymentStatus === 'legacy' ? 'QRIS lama (tanpa konfirmasi)' : 'Dikonfirmasi kasir', t.paymentReference ?? '', t.cashierName]
+      const rows = opts.perItem
+        ? txs.flatMap((t) => t.items.map((i) => [...info(t), i.productName, i.variantName, i.quantity, i.price, i.price * i.quantity, t.total]))
+        : txs.map((t) => [...info(t), t.items.map((i) => `${i.quantity}x ${i.productName}${i.variantName && i.variantName !== 'Default' ? ` (${i.variantName})` : ''}`).join('; '), ...money(t)])
+      const header = opts.perItem ? [...head, 'Produk', 'Varian', 'Jumlah', 'Harga', 'Nilai baris', 'Total transaksi'] : [...head, 'Item', ...moneyHead]
+      return { fileName: csvFileName(opts.perItem ? 'transaksi-item' : 'transaksi', now()), content: toCsv([header, ...rows]), rowCount: rows.length }
+    },
+
+    /** One event's report (summary, per hour, top products) as a sectioned CSV. Works for archived events. */
+    async exportEventReportCsv(eventId: string): Promise<CsvExport> {
+      await ready()
+      const event = (await db.events.get(eventId)) ?? fail('EVENT_NOT_FOUND', 'Event tidak ditemukan.')
+      const r = await service.getEventReport(eventId)
+      const rows = [
+        ['Laporan event', event.name], ['Lokasi', event.venue], ['Tanggal', event.dateLabel], ['Status event', event.archived ? 'Diarsipkan' : 'Aktif'],
+        ['Omzet', r.revenue], ['Omzet tunai', r.cashRevenue], ['Omzet QRIS', r.qrisRevenue], ['Total diskon', r.discountTotal],
+        ['Transaksi selesai', r.transactionCount], ['Transaksi batal', r.voidCount], ['Barang terjual', r.itemsSold], ['Rata-rata per transaksi', r.averageTicket],
+        ['QRIS lama tanpa konfirmasi', r.legacyQrisCount],
+        [],
+        ['Jam', 'Omzet', 'Transaksi'], ...r.byHour.map((h) => [`${String(h.hour).padStart(2, '0')}:00`, h.revenue, h.transactions]),
+        [],
+        ['Produk terlaris', 'Jumlah', 'Nilai (sebelum diskon)'], ...r.topProducts.map((p) => [p.productName, p.quantity, p.revenue]),
+      ]
+      return { fileName: csvFileName(`laporan-${event.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'event'}`, now()), content: toCsv(rows), rowCount: r.transactionCount }
     },
 
     async getReceiptText(transactionId: string) {

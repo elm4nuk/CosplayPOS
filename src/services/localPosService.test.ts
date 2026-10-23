@@ -556,3 +556,69 @@ describe('backup/restore v2 identik', () => {
     expect(await service.db.transactions.count()).toBe(1)
   })
 })
+
+describe('filter transaksi dan export CSV', () => {
+  async function history() {
+    const base = await seeded()
+    const { product, a5, a4, eventId } = base
+    await service.adjustStock(product.id, a5.id, 10, 'Restock'); await service.adjustStock(product.id, a4.id, 10, 'Restock')
+    const ev2 = await service.saveEvent({ name: '=HYPERLINK("x") Expo', venue: 'Bandung, Jawa Barat' })
+    clock = new Date('2026-10-17T09:00:00+07:00')
+    const t1 = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2)], cashReceived: 50000 })
+    clock = new Date('2026-10-17T15:00:00+07:00')
+    const t2 = await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true, paymentReference: 'ref 77' })
+    clock = new Date('2026-10-18T10:00:00+07:00')
+    const t3 = await service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 30000 })
+    await service.voidTransaction(t3.id, 'Salah, "dobel"')
+    return { ...base, ev2, t1, t2, t3 }
+  }
+
+  it('memfilter berdasarkan event, tanggal, metode, status, dan nomor', async () => {
+    const { eventId, ev2, t1, t2, t3 } = await history()
+    const ids = async (filter: Parameters<typeof service.listTransactions>[0]) => (await service.listTransactions(filter)).map((t) => t.id)
+    expect(await ids({})).toEqual([t3.id, t2.id, t1.id])
+    expect(await ids({ eventId })).toEqual([t2.id, t1.id])
+    expect(await ids({ eventId: ev2.id })).toEqual([t3.id])
+    expect(await ids({ from: '2026-10-17T00:00:00+07:00', to: '2026-10-18T00:00:00+07:00' })).toEqual([t2.id, t1.id])
+    expect(await ids({ from: '2026-10-17T12:00:00+07:00' })).toEqual([t3.id, t2.id])
+    expect(await ids({ paymentMethod: 'qris' })).toEqual([t2.id])
+    expect(await ids({ paymentMethod: 'cash', status: 'completed' })).toEqual([t1.id])
+    expect(await ids({ status: 'void' })).toEqual([t3.id])
+    expect(await ids({ number: 'trx-0002' })).toEqual([t2.id])
+    expect(await ids({ eventId, paymentMethod: 'cash', from: '2026-10-17T00:00:00+07:00', limit: 1 })).toEqual([t1.id])
+    expect(await code(service.listTransactions({ from: 'kemarin' }))).toBe('VALIDATION')
+    expect(await code(service.listTransactions({ from: '2026-10-18T00:00:00Z', to: '2026-10-17T00:00:00Z' }))).toBe('VALIDATION')
+  })
+
+  it('CSV transaksi aman untuk spreadsheet: BOM, kutip, dan nama berawalan = dinetralkan', async () => {
+    await history()
+    const csv = await service.exportTransactionsCsv()
+    expect(csv.rowCount).toBe(3)
+    expect(csv.fileName).toMatch(/^transaksi-\d{8}-\d{4}\.csv$/)
+    expect(csv.content.startsWith('﻿')).toBe(true)
+    const lines = csv.content.slice(1).trimEnd().split('\r\n')
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toBe('Nomor,Waktu,Waktu (UTC),Event,Status,Metode,Status bayar,Ref QRIS,Kasir,Item,Subtotal,Diskon,Promo,Total,Diterima,Kembalian,Alasan batal,Waktu batal')
+    expect(lines[1]).toMatch(/^TRX-0001,2026-10-1\d \d\d:\d\d,2026-10-17T02:00:00\.000Z,/)
+    expect(lines[1]).toContain(',Selesai,Tunai,Dikonfirmasi kasir,,Kasir Demo,2x Print Cosmic (A5),50000,0,,50000,50000,0,,')
+    expect(lines[2]).toContain(',QRIS,Dikonfirmasi kasir,ref 77,')
+    expect(lines[3]).toContain(`"'=HYPERLINK(""x"") Expo"`)
+    expect(lines[3]).toContain('"Salah, ""dobel"""')
+
+    const perItem = await service.exportTransactionsCsv({ status: 'completed' }, { perItem: true })
+    expect(perItem.rowCount).toBe(2)
+    expect(perItem.content).toContain(',Print Cosmic,A5,2,25000,50000,50000')
+  })
+
+  it('CSV laporan event memuat ringkasan, per jam, dan produk terlaris, termasuk untuk event arsip', async () => {
+    const { eventId, ev2 } = await history()
+    const csv = await service.exportEventReportCsv(eventId)
+    expect(csv.content).toContain('Omzet,90000'); expect(csv.content).toContain('Omzet tunai,50000'); expect(csv.content).toContain('Omzet QRIS,40000')
+    expect(csv.content).toContain('Jam,Omzet,Transaksi'); expect(csv.content).toContain('Print Cosmic,3,90000')
+    await service.archiveEvent(ev2.id)
+    const archived = await service.exportEventReportCsv(ev2.id)
+    expect(archived.content).toContain('Status event,Diarsipkan'); expect(archived.content).toContain('Transaksi batal,1')
+    expect(archived.fileName).toMatch(/^laporan-hyperlink-x-expo-/)
+    expect(await code(service.exportEventReportCsv('tidak-ada'))).toBe('EVENT_NOT_FOUND')
+  })
+})
