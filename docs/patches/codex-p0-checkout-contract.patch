@@ -1,0 +1,80 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 5f52535..b74534c 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -190,7 +190,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
+ 
+     await user.click(screen.getByRole('button', { name: /konfirmasi pembayaran qris/i }))
+     expect(await screen.findByRole('dialog', { name: /transaksi berhasil/i })).toBeInTheDocument()
+-    expect(screen.getByText(/qris \(lunas\)/i)).toBeInTheDocument()
++    expect(screen.getByText(/qris — dikonfirmasi kasir/i)).toBeInTheDocument()
+   })
+ 
+   it('dapat memfilter produk berdasarkan kategori yang diklik pada menu Produk', async () => {
+@@ -371,6 +371,7 @@ describe('alur UI produksi offline tanpa autentikasi', () => {
+       items: [{ productId: prod.id, variantId: prod.variants[0].id, quantity: 3 }],
+       cashReceived: 150000,
+       paymentMethod: 'qris',
++      paymentConfirmed: true,
+       idempotencyKey: crypto.randomUUID(),
+     })
+ 
+diff --git a/src/App.tsx b/src/App.tsx
+index c27bcab..b17f534 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -455,6 +455,7 @@ function CheckoutModal({
+   close,
+   discount = 0,
+   promoName,
++  bundleId,
+ }: {
+   service: LocalPosService
+   cart: CartItem[]
+@@ -464,6 +465,7 @@ function CheckoutModal({
+   close: () => void
+   discount?: number
+   promoName?: string
++  bundleId?: string
+ }) {
+   const subtotal = cart.reduce((s, x) => s + x.price * x.quantity, 0)
+   const actualDiscount = Math.min(subtotal, Math.max(0, discount))
+@@ -487,8 +489,7 @@ function CheckoutModal({
+           items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })),
+           cashReceived: cash,
+           paymentMethod: 'cash',
+-          discount: actualDiscount,
+-          promoName,
++          bundleId,
+           idempotencyKey: key.current,
+         })
+       )
+@@ -511,8 +512,9 @@ function CheckoutModal({
+           items: cart.map(({ productId, variantId, quantity }) => ({ productId, variantId, quantity })),
+           cashReceived: total,
+           paymentMethod: 'qris',
+-          discount: actualDiscount,
+-          promoName,
++          // The cashier pressed "Konfirmasi pembayaran QRIS" after seeing the payment succeed.
++          paymentConfirmed: true,
++          bundleId,
+           idempotencyKey: key.current,
+         })
+       )
+@@ -693,7 +695,7 @@ function ReceiptModal({ service, transaction, shop, close }: { service: LocalPos
+           ) : null}
+           <div><span>Total</span><b>{formatRupiah(transaction.total)}</b></div>
+           {transaction.paymentMethod === 'qris' ? (
+-            <div><span>Metode</span><b className="qris-receipt-badge">QRIS (Lunas)</b></div>
++            <div><span>Metode</span><b className="qris-receipt-badge">QRIS — dikonfirmasi kasir</b></div>
+           ) : (
+             <>
+               <div><span>Tunai</span><b>{formatRupiah(transaction.cashReceived)}</b></div>
+@@ -2496,6 +2498,7 @@ export default function App({ service = posService }: { service?: LocalPosServic
+           close={() => setCheckout(false)}
+           discount={appliedPromo?.discount}
+           promoName={appliedPromo?.name}
++          bundleId={appliedPromo?.id}
+         />
+       )}
+       {receipt && <ReceiptModal service={service} transaction={receipt} shop={settings} close={() => { setReceipt(null); setScreen('pos') }} />}

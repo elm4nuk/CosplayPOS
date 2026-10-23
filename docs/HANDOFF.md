@@ -2,7 +2,7 @@
 
 Dokumen ini adalah sumber kebenaran untuk pembagian kerja CosplayPOS. Siapa pun yang mengubah kontrak di bawah **wajib memperbarui file ini di perubahan yang sama**. Tambahkan catatan baru di § Log, jangan hapus catatan lama.
 
-Terakhir diperbarui: 2026-10-16 oleh Codex.
+Terakhir diperbarui: 2026-10-23 oleh Claude Code (branch `agent/claude-pos-integrity`, kontrak skema v2 — lihat § 6.5 dan § 9 #14–#22).
 
 ## 1. Keputusan proyek (dari pemilik, 2026-10-16)
 
@@ -51,6 +51,15 @@ Aturan:
 | Uji perangkat otomatis (gerbang 1–8, lapisan service) | ✅ `npm run android:e2e` / `scripts/device-e2e.mjs` | ⏳ alur layar perlu pass UI | lihat § 8 untuk hasil terakhir |
 | Printer Bluetooth | ⏸ menunggu model printer | ⏸ | `formatReceiptText()` sudah 32 kolom ESC/POS-ready |
 | Sinkronisasi multi-HP | ⏸ fase berikutnya | ⏸ | |
+| **Skema v2 + migrasi v1→v2** | ✅ + test migrasi + uji upgrade APK emulator 17/17 | — | § 5, § 6.5 |
+| Arsip/pulihkan event (transaksi & laporan tetap) | ✅ + test | ⏳ ganti "Hapus" → "Arsipkan", pilih pengganti untuk event aktif | `deleteEvent` = alias arsip |
+| Arsip/pulihkan produk & varian; hapus permanen hanya bila belum dipakai | ✅ + test | ⏳ tampilkan hasil `{ outcome }`, daftar arsip | |
+| Promo bundle dihitung service (anti diskon palsu) | ✅ + test | ⏳ kirim `bundleId` (patch siap) | satu promo per transaksi |
+| QRIS wajib konfirmasi kasir | ✅ + test | ⏳ kirim `paymentConfirmed: true` (patch siap) | tanpa gateway |
+| Foto: validasi + kompres + tabel `images` | ✅ + test | ⏳ tampilkan `err.message` dari `IMAGE_*` | |
+| Filter transaksi + export CSV | ✅ + test | ⏳ | `saveToDevice(..., 'text/csv')` |
+| Sesi kas (saldo awal → selisih) | ✅ + test | ⏳ | |
+| Stock opname + stok menipis per varian | ✅ + test | ⏳ ganti angka tetap `≤ 3` dengan `lowStockThreshold` | |
 
 ## 4. Keputusan teknis
 
@@ -70,7 +79,9 @@ Aturan:
 | `appId` = `com.cosplaypos.booth` (beda dari APK lama `com.cosplaypos.app`) | Bisa terpasang berdampingan dengan APK lama selama masa transisi. Kunci kerja sebelum rilis pertama ke pemakaian nyata; setelah itu **tidak boleh diganti**. |
 | Font via `@fontsource`, ikon via `lucide-react` (SVG inline), gambar di `public/` | Semua masuk bundle. `npm run check:offline` gagal jika ada URL jaringan atau file lokal hilang. (APK lama gagal cek ini: Google Fonts.) |
 
-## 5. Model data (skema v1, `src/storage/db.ts`, DB `cosplaypos-booth`)
+## 5. Model data (skema **v2** sejak 2026-10-23, `src/storage/db.ts`, DB `cosplaypos-booth`)
+
+Tabel di bawah adalah v1; perubahan v2 ada di **§ 5.1**.
 
 | Tabel | Kunci / indeks | Isi |
 |---|---|---|
@@ -83,8 +94,22 @@ Aturan:
 
 Semua timestamp ISO-8601 UTC. Item transaksi adalah **snapshot**: mengubah/menghapus produk tidak mengubah riwayat.
 
+### 5.1 Perubahan skema v2 (Claude Code, 2026-10-23)
+
+| Tabel | Perubahan v2 |
+|---|---|
+| `events` | `archived: boolean`, `archivedAt?`. Event tidak pernah dihapus. |
+| `products` | `image` (data URL) **dipindah** ke tabel `images`; baris produk menyimpan `imageId?`. `archivedAt?`. Varian: `archived?` (varian yang pernah dipakai lalu dibuang dari form disimpan tersembunyi), `lowStockThreshold?`. |
+| `transactions` | indeks baru `cashSessionId`. Field baru: `paymentMethod` selalu ada; `paymentStatus: 'confirmed' \| 'legacy'`; `paymentConfirmedAt`, `paymentConfirmedBy`, `paymentReference?`; `promo?: { bundleId, name, bundlePrice, normalPrice, discount, items }` (snapshot); `cashSessionId?`. `discount`/`promoName` tetap diisi untuk pembaca lama. |
+| `stockMovements` | indeks baru `productId`. `kind` + `'opname'`. `legacyTransactionId?` untuk riwayat stok penjualan yang dulu ikut terhapus oleh `deleteEvent` v1 (dipindah dari `transactionId`, riwayat tetap utuh). |
+| `bundles` (baru) | `{ id, name, description, price, items: [{ productId, variantId, quantity }], active, createdAt, updatedAt }` — dulu array di `meta.bundles`. |
+| `images` (baru) | `{ id, dataUrl, mime, bytes, createdAt }`. JPEG/PNG/WebP, data URL ≤ 280.000 karakter (≈ 200 KB) untuk tulisan baru. |
+| `cashSessions` (baru) | `{ id, status: 'open'\|'closed', eventId, openedAt, openedBy, openingCash, openingNote, closedAt?, closedBy?, cashSales?, transactionCount?, expectedCash?, countedCash?, difference?, closingNote? }`, indeks `openedAt`, `status`. |
+
+Migrasi v1→v2 = satu fungsi murni `migrateV1toV2()` dipakai **dua** jalur: `upgrade()` Dexie saat APK baru membuka DB lama, dan `parseBackup()` saat me-restore file backup v1. Transaksi QRIS v1 menjadi `paymentStatus: 'legacy'` (dulu memilih QRIS saja sudah dianggap lunas); tunai menjadi `confirmed`. Bukti: `src/storage/migration.test.ts` (fixture ditulis dengan skema v1 persis seperti dirilis) dan `scripts/device-upgrade-e2e.mjs` (APK `af42012` → APK branch ini di WebView emulator, 17/17).
+
 ### Migrasi
-- Jangan ubah blok `version(1)` setelah ada APK yang dipakai. Tambah `version(2).stores(...).upgrade(tx => ...)`.
+- Jangan ubah blok `version(1)` setelah ada APK yang dipakai. Tambah `version(2).stores(...).upgrade(tx => ...)`. **Sudah dilakukan untuk v2; blok `version(1)` tidak diubah.** Versi berikut = `version(3)` dengan pola yang sama (fungsi migrasi murni + test fixture v2).
 - Setiap versi baru wajib punya test yang: tulis data dengan skema lama → buka dengan skema baru → bandingkan jumlah dan isi transaksi, produk, varian, stok identik.
 - File backup membawa `schemaVersion`; restore menolak backup dari versi yang lebih baru.
 
@@ -137,6 +162,63 @@ Pilih file restore pakai `<input type="file" accept="application/json,.json">` (
 
 Auto-backup: setiap 10 penjualan ke storage privat aplikasi (5 terakhir). **Hilang jika aplikasi di-uninstall** — UI perlu mengingatkan ekspor manual di akhir hari event.
 
+### 6.5 Kontrak v2 (Claude Code, 2026-10-23) — wajib dibaca Codex
+
+Semua di `posService` (`src/services/index.ts`). Tipe diekspor dari sana: `BundlePricing`, `CashSession`, `CheckoutInput`, `CsvExport`, `LowStockItem`, `PromoInvalidReason`, `SaveBundleInput`, `StockCountInput`, `StockCountResult`, `TransactionFilter`, `PosErrorCode`, konstanta `DEFAULT_LOW_STOCK_THRESHOLD` (3) dan `IMAGE_LIMITS`.
+
+**Checkout (berubah perilaku):**
+```ts
+createTransaction({
+  eventId, items, cashReceived, idempotencyKey,
+  paymentMethod?: 'cash' | 'qris',
+  paymentConfirmed?: boolean,   // QRIS: WAJIB true, dikirim saat kasir menekan "Konfirmasi pembayaran QRIS"
+  paymentReference?: string,    // QRIS opsional, ≤ 40 karakter, tanpa deret ≥ 10 digit (nomor HP/rekening/kartu)
+  bundleId?: string,            // satu promo per transaksi; service menghitung diskon dari bundle tersimpan
+  discount?, promoName?,        // @deprecated: tanpa bundleId, discount ≠ 0 DITOLAK; promoName diabaikan
+})
+```
+- QRIS tanpa `paymentConfirmed: true` → `PAYMENT_NOT_CONFIRMED`, tidak ada yang tersimpan.
+- `discount` dari UI tanpa `bundleId` → `PROMO_INVALID` `details.reason: 'UNTRUSTED_DISCOUNT'`. Dengan `bundleId`, bila `discount` dikirim harus sama dengan hitungan service (`DISCOUNT_MISMATCH`, `details.expected`).
+- Bundle diterapkan **sekali** per transaksi walau keranjang berisi dua set. Syarat: aktif, harga integer ≥ 1, tidak ada varian ganda, semua produk/varian ada & tidak diarsip, keranjang memuat semua isi dengan jumlah cukup, harga bundle **<** harga normal. Alasan gagal (`details.reason`): `NOT_FOUND`, `INACTIVE`, `EMPTY`, `DUPLICATE_ITEM`, `PRODUCT_UNAVAILABLE`, `VARIANT_NOT_FOUND`, `INVALID_QUANTITY`, `INVALID_PRICE`, `NO_SAVING`, `INSUFFICIENT_QUANTITY`, `UNTRUSTED_DISCOUNT`, `DISCOUNT_MISMATCH`.
+- `getBundlePricing(bundleId)` → `{ valid: true, normalPrice, bundlePrice, discount } | { valid: false, reason, message }` — pakai untuk menampilkan "Hemat Rp …" dan menonaktifkan bundle yang tidak valid, alih-alih menghitung sendiri di UI.
+- `Transaction` baru membawa `bundleId`, `paymentStatus`, `paymentConfirmedAt/By`, `paymentReference`, `cashSessionId`. Struk teks: `QRIS — dikonfirmasi kasir` (+ `Ref`), atau `QRIS (data lama)` untuk `legacy`. **Jangan tulis "Lunas"/"terverifikasi" untuk QRIS di UI.**
+- Event diarsipkan → `EVENT_ARCHIVED`.
+
+**Event:**
+```ts
+archiveEvent(id, { replacementEventId? }) → { activeEventId }   // event aktif WAJIB pengganti hidup
+unarchiveEvent(id) → BoothEvent
+deleteEvent(id, replacementEventId?) → string | undefined        // @deprecated = archiveEvent; tidak menghapus transaksi
+setActiveEvent(id)                                                // event arsip → EVENT_ARCHIVED
+```
+`getBootstrap().events` hanya event hidup (bentuk sama seperti dulu + `archived: false`); `archivedEvents` berisi event arsip — pakai untuk nama event di riwayat transaksi/laporan. `getEventReport` dan `getEventComparison` tetap mencakup event arsip. Kode: `EVENT_NOT_FOUND` (dulu `NOT_FOUND` di `deleteEvent`), `EVENT_REPLACEMENT_REQUIRED`, `EVENT_ARCHIVED`, `CASH_SESSION_OPEN` (event dengan sesi kas terbuka). Event aktif terakhir tidak pernah bisa diarsipkan (tidak ada pengganti).
+
+**Produk:**
+```ts
+deleteProduct(id) → { outcome: 'deleted' | 'archived' }   // hapus permanen HANYA bila belum pernah dijual/void/disesuaikan/opname/dipakai bundle
+archiveProduct(id); unarchiveProduct(id) → Product        // unarchive menolak bila kategorinya sudah dihapus
+saveProduct({ ..., image?: dataUrl | '' , variants: [{ id?, name, price, sku?, stock?, lowStockThreshold?: number | null }] })
+```
+- Varian yang dibuang dari form: dihapus bila belum pernah dipakai, **diarsip** (tersembunyi, stok disimpan) bila pernah. Void transaksi lama tetap mengembalikan stok ke produk/varian arsip.
+- Edit produk arsip tidak memulihkannya. `deleteCategory` menolak bila masih dipakai produk arsip.
+- Pemetaan varian posisional (form satu varian tanpa `id`) hanya berlaku bila **tidak satu pun** varian di input membawa `id`.
+- `getBootstrap().products[].image` tetap data URL (diisi dari `images`), plus `imageId` stabil. `archivedProducts` = produk arsip (tanpa foto, agar memori kecil).
+
+**Foto:** `optimizeImageFile(file, maxEdgeOrOptions)` (`src/platform/images.ts`) tidak lagi menyimpan file asli bila gagal. Kode stabil: `IMAGE_INVALID_TYPE` (bukan JPG/PNG/WebP, termasuk HEIC/GIF/SVG), `IMAGE_TOO_LARGE` (file > 15 MB, atau hasil kompres tetap > batas), `IMAGE_DIMENSIONS` (> 40 MP atau sisi < 16 px, dicek dari header **sebelum** decode), `IMAGE_DECODE_FAILED` (file rusak). `message` siap tampil — mohon tampilkan `messageOf(err)` alih-alih teks generik. `saveProduct`/`saveSettings({ qrisImage })` memvalidasi ulang setiap data URL. Backup membawa foto di `data.images` (tidak ada file terpisah).
+
+**Fase berikutnya (service siap, UI belum):**
+```ts
+listTransactions({ eventId?, from?, to?, paymentMethod?, status?, number?, cashSessionId?, limit? }) → Transaction[]  // terbaru dulu; from inklusif, to eksklusif
+exportTransactionsCsv(filter?, { perItem? }) → { fileName, content, rowCount }   // simpan: saveToDevice(fileName, content, 'text/csv')
+exportEventReportCsv(eventId) → { fileName, content, rowCount }
+openCashSession({ openingCash, note?, eventId? }); closeCashSession({ countedCash, note? }); getOpenCashSession(); listCashSessions()
+recordStockCount({ note, counts: [{ productId, variantId, counted, expected? }] }) → { adjusted[], unchanged }   // expected bergeser → STOCK_CHANGED details.drift
+getLowStock() → LowStockItem[]; setLowStockThreshold(productId, variantId, n | null)
+```
+"Satu hari lokal" untuk filter: `from = new Date(y, m, d).toISOString()`, `to = new Date(y, m, d + 1).toISOString()`. CSV: UTF-8 + BOM, CRLF, sel berawalan `= + - @` diberi `'` (anti formula injection). Sesi kas: satu terbuka; penjualan saat sesi terbuka ditandai `cashSessionId`; `expectedCash = openingCash + omzet tunai selesai`; void sesudah tutup tidak mengubah angka yang sudah dihitung. `restoreBackup()` kini juga mengembalikan `upgradedFrom` (1 bila file v1).
+
+**Kode error baru (`PosErrorCode`):** `EVENT_ARCHIVED`, `EVENT_REPLACEMENT_REQUIRED`, `PROMO_INVALID`, `PAYMENT_NOT_CONFIRMED`, `IMAGE_INVALID_TYPE`, `IMAGE_TOO_LARGE`, `IMAGE_DIMENSIONS`, `IMAGE_DECODE_FAILED`, `CASH_SESSION_OPEN`, `CASH_SESSION_NOT_OPEN`.
+
 ## 7. Build & aturan rilis
 
 Prasyarat PC: Node 24, **JDK 21**, Android SDK (API 36). Sudah terpasang di PC pengembang; versi, lokasi, dan langkah ada di `docs/ANDROID_SETUP.md`.
@@ -163,6 +245,9 @@ Langkah konkret pembuatan keystore, blok `signingConfigs`, urutan rilis, dan ver
 | `npm run android:e2e` | Gerbang 1–8 di WebView Android sungguhan dengan radio mati: mode pesawat **plus** `svc wifi disable` + `svc data disable`, diverifikasi `dumpsys connectivity` (`Active default network: none`) dan `ping 8.8.8.8` yang harus gagal; keadaan Wi-Fi/data dipulihkan di akhir, juga saat skrip gagal (lihat `docs/ANDROID_SETUP.md`). Lapisan service, bukan tombol layar. |
 | `npx tsc -b && npm run lint` | Tipe dan lint |
 | `npm run check:offline` | Tidak ada URL jaringan di bundle; semua font/gambar ada |
+| `node scripts/device-upgrade-e2e.mjs <lama.apk> <baru.apk>` | (2026-10-23) Upgrade APK di atas APK lama: migrasi v1→v2 di WebView, data utuh, alur v2 jalan, restore backup v1. Cara membangun APK lama: `docs/DEVICE_TESTING.md` § 3 |
+
+Status 2026-10-23 (Claude Code, branch `agent/claude-pos-integrity`): `npm test` **74/77** — 3 yang gagal adalah test UI Codex yang memakai kontrak lama (QRIS tanpa `paymentConfirmed` ×2, diskon dari UI ×1); dengan `docs/patches/codex-p0-checkout-contract.patch` diterapkan: **77/77**. Test UI "hapus event" yang gagal di audit kini lulus (event arsip keluar dari `events`). `lint`, `build`, `check:offline` lulus. Emulator Android 16 (API 36): `android:e2e` 18/18 dan uji upgrade 17/17. **HP fisik belum diuji** — checklist wajib di `docs/DEVICE_TESTING.md` § 2.
 
 **Hasil uji perangkat terakhir (2026-10-16 14:05 WIB, Claude Code): 19/19 lulus — EMULATOR** `sdk_gphone64_x86_64`, Android 16 (API 36), bukan HP fisik. Laporan: `artifacts/device-e2e/report.json` (berisi blok `network`) dan ringkasan `artifacts/device-e2e/REPORT.md`.
 
@@ -204,6 +289,16 @@ Uji manual di HP (wajib sebelum event, belum dilakukan):
 12. Temuan dari layar emulator (Android 16, 1080×2400): pada layar setup awal, **separuh atas layar kosong** (area ilustrasi hero tidak terlihat) dan form baru mulai di tengah layar. Kolom "Uang diterima"/total tidak terlihat tanpa scroll di HP. Bukti: `artifacts/device-e2e/last-screen.png`, `fresh-launch.png`.
 13. Log WebView: `Error injecting safe area CSS: TypeError: Cannot read properties of null (reading 'style')` dari Capacitor 8 saat start. Kemungkinan terkait struktur `index.html`/`viewport-fit`; tidak memblokir, tapi mohon cek saat menangani safe-area (#9).
 
+14. **(Kontrak v2, memblokir 3 test UI)** Terapkan `docs/patches/codex-p0-checkout-contract.patch` (`git apply`), atau setara: `CheckoutModal` menerima `bundleId` dan mengirimkannya ke `createTransaction` alih-alih `discount`/`promoName`; tombol "Konfirmasi pembayaran QRIS" mengirim `paymentConfirmed: true`; struk UI menulis "QRIS — dikonfirmasi kasir" (bukan "QRIS (Lunas)"); `App.test.tsx` menambah `paymentConfirmed: true` pada transaksi QRIS di test perbandingan dan menyesuaikan teks struk. Sudah diverifikasi: 77/77, `tsc -b` dan lint bersih.
+15. Kasir: hitung "Hemat Rp …" dari `getBundlePricing()` (atau tetap hitung untuk tampilan tetapi kirim `bundleId` saja). Tangani `PROMO_INVALID` dengan `details.reason` → lepas promo dari keranjang dan tampilkan `message`.
+16. QRIS: tambah field referensi opsional (`paymentReference`) dan teks bantuan "cukup 4–6 digit terakhir"; tampilkan `paymentStatus: 'legacy'` sebagai "QRIS (data lama)" di riwayat.
+17. Event: tombol "Hapus" → "Arsipkan"; dampak di dialog: "Transaksi dan laporan tetap tersimpan; event tidak bisa dipakai jual". Untuk event aktif minta pilih pengganti lalu panggil `archiveEvent(id, { replacementEventId })`. Tampilkan `archivedEvents` (dengan tombol Pulihkan) dan pakai untuk nama event di riwayat transaksi. Teks dialog lama "seluruh data transaksi" (lihat `App.test.tsx`) sudah tidak benar.
+18. Produk: dialog hapus menampilkan hasil `deleteProduct()` — `archived` → "Produk sudah pernah dipakai, jadi diarsipkan (riwayat tetap)". Tambah daftar produk arsip + Pulihkan (`unarchiveProduct`).
+19. Foto: tampilkan `messageOf(err)` dari `optimizeImageFile` (sekarang pesan generik menyembunyikan alasan seperti HEIC/terlalu besar). `accept="image/jpeg,image/png,image/webp"`.
+20. Stok menipis: ganti angka tetap `stock <= 3` (App.tsx baris ±36, 61, 1450, 1583) dengan `variant.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD` atau `getLowStock()`; form produk dapat mengisi `lowStockThreshold`.
+21. Layar baru bila diprioritaskan pemilik: riwayat transaksi dengan filter + tombol Export CSV; laporan event + Export CSV; sesi kas (buka/tutup, selisih); stock opname (kirim `expected` = stok saat mulai hitung).
+22. Riwayat stok: `stockAdjustments[].kind` kini ada (`initial`/`adjustment`/`void`/`opname`) untuk label.
+
 ### Codex → Claude
 0. **Kontrak revisi tanpa autentikasi (menggantikan permintaan PIN #1–2 di bawah):**
    - `ready()` langsung menyiapkan sesi lokal dengan `settings.defaultCashier`; seluruh CRUD, checkout, laporan, ekspor, void, dan restore dapat digunakan tanpa `setupPins()`/`unlockCashier()`.
@@ -231,6 +326,7 @@ Uji manual di HP (wajib sebelum event, belum dilakukan):
 - Android Auto Backup (`allowBackup="true"`, bawaan template) dibiarkan aktif? **Rekomendasi Claude: `false`** — analisis di `docs/RELEASE_SIGNING.md` § 6. Restore manual sudah divalidasi (checksum, tolak skema lebih baru, snapshot `previous`); Auto Backup tidak, dan bisa menyuntikkan DB lama ke instalasi baru tanpa disadari sehingga stok dan nomor struk tidak konsisten. Belum diubah karena ini keputusan produk.
 
 ## Log
+- 2026-10-23 · Claude Code (branch `agent/claude-pos-integrity`, dari `origin/main` `af42012`) · **Skema v2 + integritas P0.** (a) Dexie `version(2)` tanpa mengubah blok v1; `migrateV1toV2()` dipakai upgrade di tempat dan restore backup v1. (b) Event diarsip, tidak dihapus; event aktif wajib pengganti; event arsip menolak checkout; transaksi, laporan, dan riwayat stok tetap. (c) Produk/varian yang pernah dipakai diarsip, hapus permanen hanya bila belum dipakai; void ke produk/varian arsip mengembalikan stok; snapshot nama/harga tetap. (d) Bundle: checkout menerima `bundleId`, diskon dihitung service, satu promo per transaksi, diskon dari UI ditolak. (e) QRIS wajib `paymentConfirmed: true`, referensi opsional tanpa data sensitif, struk "QRIS — dikonfirmasi kasir", QRIS lama `legacy`. (f) Foto: validasi MIME/ukuran/dimensi dari header sebelum decode, kompres bertahap, tanpa fallback ke file asli; disimpan di tabel `images`; backup membawa foto. (g) Filter transaksi, CSV transaksi/laporan, sesi kas, stock opname, stok menipis per varian. (h) Bug ikut diperbaiki: varian baru tanpa `id` bisa mendapat `id` varian lama (pemetaan posisional); edit produk arsip memulihkannya diam-diam; signature idempotensi QRIS tidak cocok saat retry; `deleteCategory` membiarkan produk arsip yatim sehingga backup bisa tak ter-restore. Validasi: `npm test` 74/77 (3 = test UI Codex, kontrak lama; 77/77 dengan patch § 9 #14), lint, build, `check:offline` lulus; emulator API 36: `android:e2e` 18/18, uji upgrade APK `af42012` → branch 17/17. HP fisik belum. Tidak mengubah `App.tsx`, `styles.css`, `App.test.tsx`.
 - 2026-10-16 · Codex + Claude Code · Revisi tanpa autentikasi selesai. Claude memulai filter metadata PIN pada backup tetapi mencapai batas sesi sebelum service konsisten; Codex menyelesaikan refaktor service/test/E2E berdasarkan kontrak § 9 #0. Hasil: 21/21 test, typecheck, lint, build, audit offline lulus; Android E2E 18/18 lulus pada emulator API 36 dengan radio mati dan nol request jaringan; APK produksi dibangun ulang. UI produksi langsung kasir dan memakai dialog dampak untuk void/restore/hapus/arsip. HP fisik belum tersedia.
 - 2026-10-16 · Codex · Mencatat revisi pemilik: aplikasi langsung ke kasir tanpa login/PIN. Claude diminta menghapus autentikasi dari service/backup/E2E; Codex menangani UI langsung-kasir dan dialog konfirmasi destruktif. Push GitHub ditahan sampai audit rahasia bersih dan pemilik memilih lisensi.
 - 2026-10-16 · Codex + Claude Code · Integrasi UI produksi selesai memakai `posService` untuk onboarding dua PIN, katalog, kategori, event, checkout idempoten, stok, transaksi/void, laporan per event, pengaturan, struk, backup/restore. Mock dikeluarkan dari service produksi. `npm test` 32/32, lint, build, audit offline, dan `npm run android:e2e` 19/19 lulus pada emulator Android 16 dalam mode pesawat + Wi-Fi/data mati. Setelah E2E, `npm run android:apk` membangun ulang APK produksi dan smoke-screen onboarding lulus. Tidak ada HP fisik tersambung; belum dinyatakan siap event pada perangkat nyata.

@@ -16,4 +16,11 @@ export const posService = createLocalPosService({
 if (import.meta.env.VITE_E2E === '1') Object.assign(window, { __cosplayPosE2E: { service: posService, files } })
 
 export { PosError, isPosError } from '../storage/errors'
-export type { CheckoutInput, EventReport, EventComparisonReport, LocalPosService, ReadyState, SaveProductInput, ShopSettings } from './localPosService'
+export { DEFAULT_LOW_STOCK_THRESHOLD } from './localPosService'
+export type {
+  BundlePricing, CashSession, CheckoutInput, CsvExport, EventComparisonReport, EventReport, LocalPosService, LowStockItem, PromoInvalidReason,
+  ReadyState, SaveBundleInput, SaveProductInput, ShopSettings, StockCountInput, StockCountResult, TransactionFilter,
+} from './localPosService'
+export { IMAGE_LIMITS } from '../storage/images'
+export type { PosErrorCode } from '../storage/errors'
+
