@@ -57,6 +57,14 @@ describe('akses langsung tanpa autentikasi', () => {
     await service.ready()
     expect(await service.saveSettings({ receiptPrefix: 'BTG', defaultCashier: 'Kasir Demo' })).toMatchObject({ receiptPrefix: 'BTG', defaultCashier: 'Kasir Demo' })
   })
+
+  it('deleteProduct menghapus produk dari database dan katalog', async () => {
+    const { product } = await seeded()
+    expect((await service.getBootstrap()).products.some((p) => p.id === product.id)).toBe(true)
+    await service.deleteProduct(product.id)
+    expect((await service.getBootstrap()).products.some((p) => p.id === product.id)).toBe(false)
+    expect(await service.db.products.get(product.id)).toBeUndefined()
+  })
 })
 
 describe('checkout dan stok atomik', () => {
@@ -144,6 +152,112 @@ describe('laporan, persistence, dan struk', () => {
     const receipt = await service.getReceiptText(tx.id)
     expect(receipt).toContain('Booth Bintang'); expect(receipt.split('\n').every((line) => line.length <= RECEIPT_COLUMNS)).toBe(true)
   })
+
+  it('mendukung pembayaran QRIS dan memisahkan omzet tunai vs QRIS di laporan', async () => {
+    const { product, a5, eventId } = await seeded()
+    const txCash = await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }], cashReceived: 30000, paymentMethod: 'cash' })
+    expect(txCash).toMatchObject({ paymentMethod: 'cash', paymentStatus: 'confirmed', change: 5000 })
+
+    const txQris = await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true })
+    expect(txQris).toMatchObject({ paymentMethod: 'qris', paymentStatus: 'confirmed', paymentConfirmedBy: 'Kasir Demo', cashReceived: 25000, change: 0 })
+
+    const report = await service.getEventReport(eventId)
+    expect(report).toMatchObject({ revenue: 50000, cashRevenue: 25000, qrisRevenue: 25000, transactionCount: 2, legacyQrisCount: 0 })
+  })
+
+  it('mendukung edit produk dan mencatat riwayat penyesuaian stok saat diedit', async () => {
+    const { product } = await seeded()
+    // Edit produk: ubah nama, harga, dan stok dari 3 menjadi 10
+    const updated = await service.saveProduct({
+      id: product.id,
+      name: 'Poster Art Exclusive (Updated)',
+      categoryId: product.categoryId,
+      description: 'Laminasi glossy premium',
+      image: 'data:image/webp;base64,mockupdated',
+      price: 35000,
+      stock: 10,
+    })
+
+    expect(updated.name).toBe('Poster Art Exclusive (Updated)')
+    expect(updated.image).toBe('data:image/webp;base64,mockupdated')
+    expect(updated.variants[0].price).toBe(35000)
+    expect(updated.variants[0].stock).toBe(10)
+
+    // Cek bahwa penyesuaian stok (+7) tercatat di stockAdjustments
+    const bootstrap = await service.getBootstrap()
+    const adjustment = bootstrap.stockAdjustments.find((m) => m.delta === 7)
+    expect(adjustment).toBeDefined()
+    expect(adjustment?.reason).toContain('edit produk')
+  })
+
+  it('mendukung pembuatan, edit, toggle, dan hapus promo bundle', async () => {
+    const { product, a5, a4 } = await seeded()
+    // Simpan bundle baru
+    const bundle = await service.saveBundle({
+      name: 'Paket Cosmic Double',
+      description: '1 A5 + 1 A4 dengan harga spesial',
+      price: 55000, // Harga normal 25000 + 40000 = 65000 (hemat 10000)
+      items: [
+        { productId: product.id, variantId: a5.id, quantity: 1 },
+        { productId: product.id, variantId: a4.id, quantity: 1 },
+      ],
+    })
+
+    expect(bundle.name).toBe('Paket Cosmic Double')
+    expect(bundle.price).toBe(55000)
+    expect(bundle.active).toBe(true)
+
+    // Cek di getBootstrap
+    let bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.some((b) => b.id === bundle.id)).toBe(true)
+
+    // Toggle active
+    await service.toggleBundleActive(bundle.id)
+    bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.find((b) => b.id === bundle.id)?.active).toBe(false)
+
+    // Hapus bundle
+    await service.deleteBundle(bundle.id)
+    bootstrap = await service.getBootstrap()
+    expect(bootstrap.bundles.some((b) => b.id === bundle.id)).toBe(false)
+  })
+
+  it('checkout bundle memakai bundleId, diskon dihitung service, dan struk mencatat diskon', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    const bundle = await service.saveBundle({ name: 'Paket Cosmic Double', price: 55000, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }, { productId: product.id, variantId: a4.id, quantity: 1 }] })
+    const tx = await service.createTransaction({ eventId, items: [{ productId: product.id, variantId: a5.id, quantity: 1 }, { productId: product.id, variantId: a4.id, quantity: 1 }], cashReceived: 60000, bundleId: bundle.id })
+    expect(tx).toMatchObject({ subtotal: 65000, discount: 10000, total: 55000, change: 5000, promoName: 'Paket Cosmic Double', bundleId: bundle.id })
+    expect((await service.db.transactions.get(tx.id))?.promo).toEqual({ bundleId: bundle.id, name: 'Paket Cosmic Double', bundlePrice: 55000, normalPrice: 65000, discount: 10000, items: bundle.items })
+    const receipt = await service.getReceiptText(tx.id)
+    expect(receipt).toContain('Subtotal'); expect(receipt).toContain('Diskon (Paket Cosmic'); expect(receipt).toContain('-Rp 10.000')
+  })
+
+  it('menghasilkan laporan perbandingan antar event secara akurat', async () => {
+    const { product, a5, a4, eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'Anime Expo Jakarta', venue: 'Balai Kartini', dateLabel: '20 Okt 2026' })
+
+    // Transaksi di Event 1: Omzet 50.000
+    await service.createTransaction({
+      eventId: ev1,
+      items: [{ productId: product.id, variantId: a5.id, quantity: 2 }],
+      cashReceived: 50000,
+    })
+
+    // Transaksi di Event 2: Omzet 40.000
+    await service.createTransaction({
+      eventId: ev2.id,
+      items: [{ productId: product.id, variantId: a4.id, quantity: 1 }],
+      cashReceived: 50000,
+    })
+
+    const comparison = await service.getEventComparison()
+    expect(comparison.events).toHaveLength(2)
+    expect(comparison.summary.totalRevenueAllEvents).toBe(90000)
+    expect(comparison.summary.totalTransactionsAllEvents).toBe(2)
+    expect(comparison.summary.bestRevenueEvent?.id).toBe(ev1)
+    expect(comparison.summary.bestRevenueEvent?.revenue).toBe(50000)
+  })
+
 })
 
 describe('backup tanpa kredensial', () => {
@@ -181,5 +295,442 @@ describe('pemisahan data demo', () => {
   it('helper test mengisi katalog fiktif hanya saat kosong', async () => {
     await service.ready(); await seedDemoCatalog(service); const data = await service.getBootstrap()
     expect(data.products.map((p) => p.name).sort()).toEqual(initialMockData.products.map((p) => p.name).sort()); await expect(seedDemoCatalog(service)).rejects.toThrow(/katalog harus kosong/i)
+  })
+})
+
+const item = (productId: string, variantId: string, quantity = 1) => ({ productId, variantId, quantity })
+const tableDump = async (instance: LocalPosService) => Object.fromEntries(await Promise.all(instance.db.tables.map(async (t) => [t.name, await t.toArray()] as const)))
+const tinyJpeg = (n = 8) => `data:image/jpeg;base64,${'A'.repeat(n * 4)}`
+
+describe('arsip event: transaksi dan laporan tidak hilang', () => {
+  it('event yang diarsipkan menyimpan transaksi, laporan, dan riwayat stok, tetapi menolak penjualan baru', async () => {
+    const { product, a5, eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'Comifuro 19', venue: 'ICE BSD' })
+    const sale = await service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    const reportBefore = await service.getEventReport(ev2.id)
+
+    expect(await service.archiveEvent(ev2.id)).toEqual({ activeEventId: ev1 })
+    const data = await service.getBootstrap()
+    expect(data.events.map((e) => e.id)).toEqual([ev1])
+    expect(data.archivedEvents).toMatchObject([{ id: ev2.id, archived: true, active: false }])
+    expect(data.transactions.find((t) => t.id === sale.id)).toMatchObject({ eventId: ev2.id, status: 'completed' })
+    expect(await service.getEventReport(ev2.id)).toEqual(reportBefore)
+    expect((await service.getEventComparison()).events.map((e) => e.event.id)).toContain(ev2.id)
+
+    const before = await service.db.transactions.count()
+    expect(await code(service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 25000 }))).toBe('EVENT_ARCHIVED')
+    expect(await code(service.setActiveEvent(ev2.id))).toBe('EVENT_ARCHIVED')
+    expect(await service.db.transactions.count()).toBe(before)
+
+    // A sale from an archived event can still be voided, and every movement points at a real transaction.
+    await service.voidTransaction(sale.id, 'Salah input')
+    expect(await stockOf(a5.id)).toBe(3)
+    const txIds = new Set((await service.db.transactions.toArray()).map((t) => t.id))
+    expect((await service.db.stockMovements.toArray()).every((m) => !m.transactionId || txIds.has(m.transactionId))).toBe(true)
+  })
+
+  it('event aktif tidak bisa diarsipkan tanpa pengganti yang valid', async () => {
+    const { eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'Creator Alley' })
+    const ev3 = await service.saveEvent({ name: 'Gelar Jepang' })
+    expect(await failure(service.archiveEvent(ev1))).toMatchObject({ code: 'EVENT_REPLACEMENT_REQUIRED' })
+    expect(await code(service.archiveEvent(ev1, { replacementEventId: ev1 }))).toBe('VALIDATION')
+    expect(await code(service.archiveEvent(ev1, { replacementEventId: 'tidak-ada' }))).toBe('EVENT_NOT_FOUND')
+    await service.archiveEvent(ev3.id)
+    expect(await code(service.archiveEvent(ev1, { replacementEventId: ev3.id }))).toBe('EVENT_ARCHIVED')
+    // Nothing above changed anything.
+    expect((await service.getBootstrap()).events.find((e) => e.active)?.id).toBe(ev1)
+
+    expect(await service.archiveEvent(ev1, { replacementEventId: ev2.id })).toEqual({ activeEventId: ev2.id })
+    const data = await service.getBootstrap()
+    expect(data.events).toMatchObject([{ id: ev2.id, active: true }])
+    // The only live event is active and has no possible replacement, so it can never be archived.
+    expect(await code(service.archiveEvent(ev2.id, { replacementEventId: ev1 }))).toBe('EVENT_ARCHIVED')
+    expect(await code(service.archiveEvent(ev2.id))).toBe('EVENT_REPLACEMENT_REQUIRED')
+  })
+
+  it('deleteEvent lama kini mengarsipkan, mengembalikan event aktif baru, dan event dapat dipulihkan', async () => {
+    const { product, a5, eventId: ev1 } = await seeded()
+    const ev2 = await service.saveEvent({ name: 'ChibiCon 2026' })
+    await service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    expect(await service.deleteEvent(ev2.id)).toBeUndefined()
+    expect(await service.db.events.get(ev2.id)).toMatchObject({ archived: true })
+    expect(await service.db.transactions.where('eventId').equals(ev2.id).count()).toBe(1)
+    expect(await code(service.deleteEvent('tidak-ada'))).toBe('EVENT_NOT_FOUND')
+
+    expect(await service.unarchiveEvent(ev2.id)).toMatchObject({ id: ev2.id, archived: false })
+    await service.setActiveEvent(ev2.id)
+    expect(await code(service.deleteEvent(ev2.id))).toBe('EVENT_REPLACEMENT_REQUIRED')
+    expect(await service.deleteEvent(ev2.id, ev1)).toBe(ev1)
+    // Editing an archived event keeps it archived.
+    await service.saveEvent({ id: ev2.id, name: 'ChibiCon 2026 (revisi)' })
+    expect(await service.db.events.get(ev2.id)).toMatchObject({ archived: true, name: 'ChibiCon 2026 (revisi)' })
+  })
+})
+
+describe('arsip produk dan audit stok', () => {
+  it('produk yang belum pernah dipakai dihapus permanen beserta baris stok awalnya', async () => {
+    const { product } = await seeded()
+    expect(await service.deleteProduct(product.id)).toEqual({ outcome: 'deleted' })
+    expect(await service.db.products.get(product.id)).toBeUndefined()
+    expect(await service.db.stockMovements.where('productId').equals(product.id).count()).toBe(0)
+  })
+
+  it('produk yang pernah terjual diarsipkan, snapshot transaksi tetap, dan void mengembalikan stok ke produk arsip', async () => {
+    const { product, a5, eventId } = await seeded()
+    const sale = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2)], cashReceived: 50000 })
+    await service.saveProduct({ id: product.id, name: 'Nama Baru', categoryId: product.categoryId, variants: [{ id: a5.id, price: 99000 }, { id: product.variants[1].id, price: 40000 }] })
+
+    expect(await service.deleteProduct(product.id)).toEqual({ outcome: 'archived' })
+    const data = await service.getBootstrap()
+    expect(data.products.some((p) => p.id === product.id)).toBe(false)
+    expect(data.archivedProducts?.find((p) => p.id === product.id)).toMatchObject({ archived: true, name: 'Nama Baru' })
+    expect(data.transactions.find((t) => t.id === sale.id)?.items[0]).toMatchObject({ productName: 'Print Cosmic', price: 25000, quantity: 2 })
+    expect(await code(service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 99000 }))).toBe('STOCK_CHANGED')
+
+    await service.voidTransaction(sale.id, 'Pembeli batal')
+    const row = await service.db.products.get(product.id)
+    expect(row?.variants.find((v) => v.id === a5.id)?.stock).toBe(3)
+    expect(row?.archived).toBe(true)
+    const voidMove = await service.db.stockMovements.where('transactionId').equals(sale.id).filter((m) => m.kind === 'void').first()
+    expect(voidMove).toMatchObject({ delta: 2, stockAfter: 3, productName: 'Print Cosmic' })
+  })
+
+  it('varian yang pernah terjual lalu dihapus dari produk diarsipkan, bukan dibuang', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    const sale = await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 40000 })
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }] })
+    expect((await service.getBootstrap()).products.find((p) => p.id === product.id)?.variants.map((v) => v.id)).toEqual([a5.id])
+    expect((await service.db.products.get(product.id))?.variants.find((v) => v.id === a4.id)).toMatchObject({ archived: true, stock: 0 })
+    expect(await code(service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 40000 }))).toBe('STOCK_CHANGED')
+    await service.voidTransaction(sale.id, 'Retur')
+    expect((await service.db.products.get(product.id))?.variants.find((v) => v.id === a4.id)?.stock).toBe(1)
+    // A variant that was never used is simply removed.
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }, { name: 'Baru', price: 1000, stock: 0 }] })
+    const withNew = await service.db.products.get(product.id)
+    const fresh = withNew!.variants.find((v) => v.name === 'Baru')!
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }] })
+    expect((await service.db.products.get(product.id))?.variants.some((v) => v.id === fresh.id)).toBe(false)
+  })
+
+  it('edit produk arsip tidak memulihkannya; pulihkan eksplisit; kategori produk arsip tidak bisa dihapus', async () => {
+    const { product, a5, eventId } = await seeded()
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    await service.archiveProduct(product.id)
+    await service.saveProduct({ id: product.id, name: 'Masih Arsip', categoryId: product.categoryId, price: 1 })
+    expect(await service.db.products.get(product.id)).toMatchObject({ archived: true, name: 'Masih Arsip' })
+    expect(await code(service.deleteCategory(product.categoryId))).toBe('VALIDATION')
+    expect(await service.unarchiveProduct(product.id)).toMatchObject({ id: product.id, name: 'Masih Arsip' })
+    expect((await service.getBootstrap()).products.some((p) => p.id === product.id)).toBe(true)
+  })
+})
+
+describe('promo bundle dihitung service dan tidak bisa dipalsukan', () => {
+  async function withBundle() {
+    const base = await seeded()
+    const bundle = await service.saveBundle({ name: 'Duo', price: 55000, items: [item(base.product.id, base.a5.id), item(base.product.id, base.a4.id)] })
+    const cart = [item(base.product.id, base.a5.id), item(base.product.id, base.a4.id)]
+    return { ...base, bundle, cart }
+  }
+
+  it('diskon dan nama promo dari UI tidak dipercaya', async () => {
+    const { eventId, bundle, cart } = await withBundle()
+    expect(await failure(service.createTransaction({ eventId, items: cart, cashReceived: 65000, discount: 30000, promoName: 'Palsu' }))).toMatchObject({ code: 'PROMO_INVALID', details: { reason: 'UNTRUSTED_DISCOUNT' } })
+    expect(await failure(service.createTransaction({ eventId, items: cart, cashReceived: 65000, bundleId: bundle.id, discount: 30000 }))).toMatchObject({ code: 'PROMO_INVALID', details: { reason: 'DISCOUNT_MISMATCH', expected: 10000 } })
+    expect(await service.db.transactions.count()).toBe(0)
+    const tx = await service.createTransaction({ eventId, items: cart, cashReceived: 55000, bundleId: bundle.id, discount: 10000, promoName: 'Palsu' })
+    expect(tx).toMatchObject({ total: 55000, discount: 10000, promoName: 'Duo' })
+    expect(Number.isSafeInteger(tx.total) && Number.isSafeInteger(tx.discount)).toBe(true)
+  })
+
+  it('satu promo per transaksi: bundle dipakai sekali walau keranjang berisi dua set', async () => {
+    const { product, a5, a4, eventId, bundle } = await withBundle()
+    await service.adjustStock(product.id, a4.id, 1, 'Restock')
+    const tx = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2), item(product.id, a4.id, 2)], cashReceived: 200000, bundleId: bundle.id })
+    expect(tx).toMatchObject({ subtotal: 130000, discount: 10000, total: 120000 })
+  })
+
+  it('menolak bundle yang tidak ditemukan, nonaktif, kurang kuantitas, atau isinya tidak tersedia', async () => {
+    const { product, a5, a4, eventId, bundle, cart } = await withBundle()
+    const reason = async (input: Partial<Parameters<typeof service.createTransaction>[0]>) => (await failure(service.createTransaction({ eventId, items: cart, cashReceived: 65000, ...input }))).details?.reason
+
+    expect(await reason({ bundleId: 'tidak-ada' })).toBe('NOT_FOUND')
+    expect(await reason({ bundleId: bundle.id, items: [item(product.id, a5.id)] })).toBe('INSUFFICIENT_QUANTITY')
+    await service.toggleBundleActive(bundle.id)
+    expect(await reason({ bundleId: bundle.id })).toBe('INACTIVE')
+    await service.setBundleActive(bundle.id, true)
+
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }, { id: a4.id, price: 20000 }] })
+    expect(await reason({ bundleId: bundle.id })).toBe('NO_SAVING')
+    expect(await service.getBundlePricing(bundle.id)).toMatchObject({ valid: false, reason: 'NO_SAVING' })
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }, { id: a4.id, price: 40000 }] })
+    expect(await service.getBundlePricing(bundle.id)).toEqual({ bundleId: bundle.id, valid: true, normalPrice: 65000, bundlePrice: 55000, discount: 10000 })
+
+    // Removing a variant that a bundle uses archives it; the bundle then fails closed.
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }] })
+    expect(await reason({ bundleId: bundle.id, items: [item(product.id, a5.id)] })).toBe('VARIANT_NOT_FOUND')
+    await service.archiveProduct(product.id)
+    expect(await service.getBundlePricing(bundle.id)).toMatchObject({ valid: false, reason: 'PRODUCT_UNAVAILABLE' })
+    expect(await service.db.transactions.count()).toBe(0)
+  })
+
+  it('menolak isi duplikat dan harga tidak valid saat simpan maupun bila data tersimpan rusak', async () => {
+    const { product, a5, eventId, bundle, cart } = await withBundle()
+    expect(await code(service.saveBundle({ name: 'Dobel', price: 30000, items: [item(product.id, a5.id), item(product.id, a5.id)] }))).toBe('VALIDATION')
+    expect(await code(service.saveBundle({ name: 'Gratis', price: 0, items: [item(product.id, a5.id)] }))).toBe('VALIDATION')
+    expect(await code(service.saveBundle({ name: 'Hantu', price: 1000, items: [item('hilang', a5.id)] }))).toBe('VALIDATION')
+    expect(await code(service.saveBundle({ name: 'Varian hantu', price: 1000, items: [item(product.id, 'hilang')] }))).toBe('VALIDATION')
+
+    await service.db.bundles.update(bundle.id, { items: [item(product.id, a5.id), item(product.id, a5.id)] })
+    expect((await failure(service.createTransaction({ eventId, items: cart, cashReceived: 65000, bundleId: bundle.id }))).details?.reason).toBe('DUPLICATE_ITEM')
+    await service.db.bundles.update(bundle.id, { items: cart, price: 1.5 })
+    expect((await failure(service.createTransaction({ eventId, items: cart, cashReceived: 65000, bundleId: bundle.id }))).details?.reason).toBe('INVALID_PRICE')
+  })
+})
+
+describe('QRIS offline wajib konfirmasi kasir', () => {
+  it('memilih QRIS saja tidak dianggap lunas', async () => {
+    const { product, a5, eventId } = await seeded()
+    expect(await code(service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 0, paymentMethod: 'qris' }))).toBe('PAYMENT_NOT_CONFIRMED')
+    expect(await code(service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: 'ya' as never }))).toBe('PAYMENT_NOT_CONFIRMED')
+    expect(await stockOf(a5.id)).toBe(3); expect(await service.db.transactions.count()).toBe(0)
+  })
+
+  it('referensi QRIS opsional disimpan, data sensitif ditolak, dan struk tidak mengklaim verifikasi gateway', async () => {
+    const { product, a5, eventId } = await seeded()
+    const qris = (paymentReference?: string) => service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true, paymentReference })
+    expect(await code(qris('081234567890'))).toBe('VALIDATION')
+    expect(await code(qris('4111 1111 1111 1111'))).toBe('VALIDATION')
+    expect(await code(qris('x'.repeat(41)))).toBe('VALIDATION')
+    expect(await code(service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000, paymentReference: 'ref 1234' }))).toBe('VALIDATION')
+    const tx = await qris('  ref   1234 ')
+    expect(tx).toMatchObject({ paymentReference: 'ref 1234', paymentStatus: 'confirmed' })
+    const receipt = await service.getReceiptText(tx.id)
+    expect(receipt).toContain('QRIS — dikonfirmasi kasir'); expect(receipt).toContain('ref 1234')
+    expect(receipt).not.toMatch(/lunas|terverifikasi|verified/i)
+    expect(receipt.split('\n').every((line) => line.length <= RECEIPT_COLUMNS)).toBe(true)
+  })
+
+  it('idempotency QRIS: retry dengan kunci sama tidak menjual dua kali', async () => {
+    const { product, a5, eventId } = await seeded()
+    const input = { eventId, items: [item(product.id, a5.id)], cashReceived: 25000, paymentMethod: 'qris' as const, paymentConfirmed: true, idempotencyKey: crypto.randomUUID() }
+    const first = await service.createTransaction(input)
+    expect((await service.createTransaction(input)).id).toBe(first.id)
+    expect(await service.db.transactions.count()).toBe(1)
+  })
+})
+
+describe('foto produk di tabel images', () => {
+  it('foto disimpan terpisah dari baris produk, tervalidasi, dan dapat dihapus', async () => {
+    const { product } = await seeded()
+    const variants = product.variants.map((v) => ({ id: v.id, price: v.price }))
+    expect(await code(service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants, image: 'data:image/svg+xml;base64,PHN2Zz4=' }))).toBe('IMAGE_INVALID_TYPE')
+    expect(await code(service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants, image: `data:image/jpeg;base64,${'A'.repeat(300_000)}` }))).toBe('IMAGE_TOO_LARGE')
+    expect(await code(service.saveSettings({ qrisImage: 'bukan-gambar' }))).toBe('IMAGE_INVALID_TYPE')
+
+    const photo = tinyJpeg()
+    const saved = await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants, image: photo })
+    expect(saved.image).toBe(photo)
+    const row = await service.db.products.get(product.id)
+    expect(row?.image).toBeUndefined(); expect(row?.imageId).toBeTruthy()
+    expect(await service.db.images.get(row!.imageId!)).toMatchObject({ dataUrl: photo, mime: 'image/jpeg' })
+    expect((await service.getBootstrap()).products[0]).toMatchObject({ image: photo, imageId: row!.imageId })
+
+    // Re-saving the same photo keeps the same reference; removing it deletes the row.
+    await service.saveProduct({ id: product.id, name: 'Ganti nama', categoryId: product.categoryId, variants, image: photo })
+    expect((await service.db.products.get(product.id))?.imageId).toBe(row!.imageId)
+    await service.saveProduct({ id: product.id, name: 'Ganti nama', categoryId: product.categoryId, variants, image: '' })
+    expect(await service.db.images.count()).toBe(0)
+  })
+})
+
+describe('backup/restore v2 identik', () => {
+  it('restore ke instalasi baru menghasilkan isi tabel yang identik, termasuk foto, bundle, dan event arsip', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000 }, { id: a4.id, price: 40000 }], image: tinyJpeg() })
+    const bundle = await service.saveBundle({ name: 'Duo', price: 55000, items: [item(product.id, a5.id), item(product.id, a4.id)] })
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id), item(product.id, a4.id)], cashReceived: 55000, bundleId: bundle.id })
+    const ev2 = await service.saveEvent({ name: 'Lama' })
+    await service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true, paymentReference: 'ref 99' })
+    await service.archiveEvent(ev2.id)
+
+    const backup = await service.exportBackup()
+    expect(backup.schemaVersion).toBe(2)
+    expect(backup.counts).toMatchObject({ images: 1, bundles: 1, transactions: 2 })
+    const fresh = open(`${dbName}-restore`); extraServices.push(fresh); await fresh.ready()
+    const result = await fresh.restoreBackup(JSON.stringify(backup))
+    expect(result.upgradedFrom).toBeUndefined()
+    expect(await tableDump(fresh)).toEqual(await tableDump(service))
+    expect(await fresh.getBootstrap()).toEqual(await service.getBootstrap())
+  })
+
+  it('menolak backup v2 dengan riwayat stok yatim atau semua event diarsipkan', async () => {
+    const { product, a5, eventId } = await seeded()
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    const reseal = async (mutate: (b: Awaited<ReturnType<typeof service.exportBackup>>) => void) => {
+      const b = structuredClone(await service.exportBackup()); mutate(b)
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(b.data)))
+      b.checksum = Array.from(new Uint8Array(digest), (x) => x.toString(16).padStart(2, '0')).join('')
+      return JSON.stringify(b)
+    }
+    const orphan = await reseal((b) => { b.data.transactions = []; b.counts.transactions = 0 })
+    expect((await failure(service.restoreBackup(orphan))).message).toMatch(/riwayat stok merujuk transaksi/)
+    const allArchived = await reseal((b) => { for (const e of b.data.events as { archived: boolean }[]) e.archived = true })
+    expect((await failure(service.restoreBackup(allArchived))).message).toMatch(/tidak ada event yang aktif/)
+    expect(await service.db.transactions.count()).toBe(1)
+  })
+})
+
+describe('filter transaksi dan export CSV', () => {
+  async function history() {
+    const base = await seeded()
+    const { product, a5, a4, eventId } = base
+    await service.adjustStock(product.id, a5.id, 10, 'Restock'); await service.adjustStock(product.id, a4.id, 10, 'Restock')
+    const ev2 = await service.saveEvent({ name: '=HYPERLINK("x") Expo', venue: 'Bandung, Jawa Barat' })
+    clock = new Date('2026-10-17T09:00:00+07:00')
+    const t1 = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2)], cashReceived: 50000 })
+    clock = new Date('2026-10-17T15:00:00+07:00')
+    const t2 = await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true, paymentReference: 'ref 77' })
+    clock = new Date('2026-10-18T10:00:00+07:00')
+    const t3 = await service.createTransaction({ eventId: ev2.id, items: [item(product.id, a5.id)], cashReceived: 30000 })
+    await service.voidTransaction(t3.id, 'Salah, "dobel"')
+    return { ...base, ev2, t1, t2, t3 }
+  }
+
+  it('memfilter berdasarkan event, tanggal, metode, status, dan nomor', async () => {
+    const { eventId, ev2, t1, t2, t3 } = await history()
+    const ids = async (filter: Parameters<typeof service.listTransactions>[0]) => (await service.listTransactions(filter)).map((t) => t.id)
+    expect(await ids({})).toEqual([t3.id, t2.id, t1.id])
+    expect(await ids({ eventId })).toEqual([t2.id, t1.id])
+    expect(await ids({ eventId: ev2.id })).toEqual([t3.id])
+    expect(await ids({ from: '2026-10-17T00:00:00+07:00', to: '2026-10-18T00:00:00+07:00' })).toEqual([t2.id, t1.id])
+    expect(await ids({ from: '2026-10-17T12:00:00+07:00' })).toEqual([t3.id, t2.id])
+    expect(await ids({ paymentMethod: 'qris' })).toEqual([t2.id])
+    expect(await ids({ paymentMethod: 'cash', status: 'completed' })).toEqual([t1.id])
+    expect(await ids({ status: 'void' })).toEqual([t3.id])
+    expect(await ids({ number: 'trx-0002' })).toEqual([t2.id])
+    expect(await ids({ eventId, paymentMethod: 'cash', from: '2026-10-17T00:00:00+07:00', limit: 1 })).toEqual([t1.id])
+    expect(await code(service.listTransactions({ from: 'kemarin' }))).toBe('VALIDATION')
+    expect(await code(service.listTransactions({ from: '2026-10-18T00:00:00Z', to: '2026-10-17T00:00:00Z' }))).toBe('VALIDATION')
+  })
+
+  it('CSV transaksi aman untuk spreadsheet: BOM, kutip, dan nama berawalan = dinetralkan', async () => {
+    await history()
+    const csv = await service.exportTransactionsCsv()
+    expect(csv.rowCount).toBe(3)
+    expect(csv.fileName).toMatch(/^transaksi-\d{8}-\d{4}\.csv$/)
+    expect(csv.content.startsWith('﻿')).toBe(true)
+    const lines = csv.content.slice(1).trimEnd().split('\r\n')
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toBe('Nomor,Waktu,Waktu (UTC),Event,Status,Metode,Status bayar,Ref QRIS,Kasir,Item,Subtotal,Diskon,Promo,Total,Diterima,Kembalian,Alasan batal,Waktu batal')
+    expect(lines[1]).toMatch(/^TRX-0001,2026-10-1\d \d\d:\d\d,2026-10-17T02:00:00\.000Z,/)
+    expect(lines[1]).toContain(',Selesai,Tunai,Dikonfirmasi kasir,,Kasir Demo,2x Print Cosmic (A5),50000,0,,50000,50000,0,,')
+    expect(lines[2]).toContain(',QRIS,Dikonfirmasi kasir,ref 77,')
+    expect(lines[3]).toContain(`"'=HYPERLINK(""x"") Expo"`)
+    expect(lines[3]).toContain('"Salah, ""dobel"""')
+
+    const perItem = await service.exportTransactionsCsv({ status: 'completed' }, { perItem: true })
+    expect(perItem.rowCount).toBe(2)
+    expect(perItem.content).toContain(',Print Cosmic,A5,2,25000,50000,50000')
+  })
+
+  it('CSV laporan event memuat ringkasan, per jam, dan produk terlaris, termasuk untuk event arsip', async () => {
+    const { eventId, ev2 } = await history()
+    const csv = await service.exportEventReportCsv(eventId)
+    expect(csv.content).toContain('Omzet,90000'); expect(csv.content).toContain('Omzet tunai,50000'); expect(csv.content).toContain('Omzet QRIS,40000')
+    expect(csv.content).toContain('Jam,Omzet,Transaksi'); expect(csv.content).toContain('Print Cosmic,3,90000')
+    await service.archiveEvent(ev2.id)
+    const archived = await service.exportEventReportCsv(ev2.id)
+    expect(archived.content).toContain('Status event,Diarsipkan'); expect(archived.content).toContain('Transaksi batal,1')
+    expect(archived.fileName).toMatch(/^laporan-hyperlink-x-expo-/)
+    expect(await code(service.exportEventReportCsv('tidak-ada'))).toBe('EVENT_NOT_FOUND')
+  })
+})
+
+describe('sesi kas', () => {
+  it('menghitung omzet tunai, uang seharusnya, dan selisih; void dikecualikan; QRIS terpisah', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    await service.adjustStock(product.id, a5.id, 10, 'Restock')
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    expect(await service.getOpenCashSession()).toBeNull()
+
+    clock = new Date('2026-10-17T11:00:00+07:00')
+    const opened = await service.openCashSession({ openingCash: 200000, note: 'Modal kembalian' })
+    expect(opened).toMatchObject({ status: 'open', eventId, openingCash: 200000, cashSales: 0, expectedCash: 200000, openedBy: 'Kasir Demo' })
+    expect(await code(service.openCashSession({ openingCash: 0 }))).toBe('CASH_SESSION_OPEN')
+
+    const s1 = await service.createTransaction({ eventId, items: [item(product.id, a5.id, 2)], cashReceived: 100000 })
+    const s2 = await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 0, paymentMethod: 'qris', paymentConfirmed: true })
+    const s3 = await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    await service.voidTransaction(s3.id, 'Batal')
+    expect(s1.cashSessionId).toBe(opened.id); expect(s2.cashSessionId).toBe(opened.id)
+    expect(await service.getOpenCashSession()).toMatchObject({ cashSales: 50000, cashTransactionCount: 1, qrisSales: 40000, expectedCash: 250000 })
+    expect(await code(service.archiveEvent(eventId, { replacementEventId: (await service.saveEvent({ name: 'Lain' })).id }))).toBe('CASH_SESSION_OPEN')
+
+    clock = new Date('2026-10-17T20:00:00+07:00')
+    const closed = await service.closeCashSession({ countedCash: 245000, note: 'Kurang 5rb' })
+    expect(closed).toMatchObject({ status: 'closed', cashSales: 50000, expectedCash: 250000, countedCash: 245000, difference: -5000, closingNote: 'Kurang 5rb', closedBy: 'Kasir Demo' })
+    expect(closed.closedAt).toBe(clock.toISOString())
+    expect(await code(service.closeCashSession({ countedCash: 0 }))).toBe('CASH_SESSION_NOT_OPEN')
+
+    // A void after closing does not rewrite what was counted.
+    await service.voidTransaction(s1.id, 'Retur besok')
+    expect((await service.listCashSessions())[0]).toMatchObject({ cashSales: 50000, expectedCash: 250000, difference: -5000 })
+    expect((await service.listTransactions({ cashSessionId: opened.id })).map((t) => t.id).sort()).toEqual([s1.id, s2.id, s3.id].sort())
+    // Sales after closing are not tagged.
+    expect((await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })).cashSessionId).toBeUndefined()
+  })
+
+  it('validasi input sesi kas dan sesi kas ikut backup', async () => {
+    const { eventId } = await seeded()
+    expect(await code(service.openCashSession({ openingCash: -1 }))).toBe('VALIDATION')
+    expect(await code(service.openCashSession({ openingCash: 1.5 }))).toBe('VALIDATION')
+    const ev2 = await service.saveEvent({ name: 'Arsip' }); await service.archiveEvent(ev2.id)
+    expect(await code(service.openCashSession({ openingCash: 0, eventId: ev2.id }))).toBe('EVENT_ARCHIVED')
+    await service.openCashSession({ openingCash: 50000, eventId })
+    const backup = await service.exportBackup()
+    expect(backup.counts.cashSessions).toBe(1)
+    const fresh = open(`${dbName}-cash`); extraServices.push(fresh); await fresh.ready(); await fresh.restoreBackup(JSON.stringify(backup))
+    expect(await fresh.getOpenCashSession()).toMatchObject({ openingCash: 50000, status: 'open' })
+  })
+})
+
+describe('stock opname dan stok menipis per varian', () => {
+  it('opname menyetel stok ke hitungan fisik secara atomik dengan riwayat opname', async () => {
+    const { product, a5, a4 } = await seeded()
+    clock = new Date('2026-10-17T21:00:00+07:00')
+    const result = await service.recordStockCount({ note: 'Akhir hari 1', counts: [{ productId: product.id, variantId: a5.id, counted: 1, expected: 3 }, { productId: product.id, variantId: a4.id, counted: 1, expected: 1 }] })
+    expect(result).toEqual({ adjusted: [{ productId: product.id, variantId: a5.id, productName: 'Print Cosmic', variantName: 'A5', before: 3, counted: 1, delta: -2 }], unchanged: 1 })
+    expect(await stockOf(a5.id)).toBe(1)
+    const move = await service.db.stockMovements.where('variantId').equals(a5.id).filter((m) => m.kind === 'opname').first()
+    expect(move).toMatchObject({ delta: -2, stockAfter: 1, reason: 'Stock opname: Akhir hari 1', actor: 'Kasir Demo' })
+    expect((await service.getBootstrap()).stockAdjustments[0]).toMatchObject({ kind: 'opname', delta: -2 })
+  })
+
+  it('opname ditolak seluruhnya bila stok bergeser sejak mulai menghitung atau input tidak valid', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    await service.createTransaction({ eventId, items: [item(product.id, a5.id)], cashReceived: 25000 })
+    const err = await failure(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: 0, expected: 1 }, { productId: product.id, variantId: a5.id, counted: 0, expected: 3 }] }))
+    expect(err).toMatchObject({ code: 'STOCK_CHANGED', details: { drift: [{ variantId: a5.id, expected: 3, actual: 2 }] } })
+    expect(await stockOf(a4.id)).toBe(1)
+    expect(await code(service.recordStockCount({ note: ' ', counts: [{ productId: product.id, variantId: a4.id, counted: 0 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: -1 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: a4.id, counted: 0 }, { productId: product.id, variantId: a4.id, counted: 1 }] }))).toBe('VALIDATION')
+    expect(await code(service.recordStockCount({ note: 'x', counts: [{ productId: product.id, variantId: 'hilang', counted: 0 }] }))).toBe('NOT_FOUND')
+  })
+
+  it('batas stok menipis per varian, default 3, habis didahulukan', async () => {
+    const { product, a5, a4, eventId } = await seeded()
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.stock, v.threshold, v.outOfStock])).toEqual([[a4.id, 1, 3, false], [a5.id, 3, 3, false]])
+    await service.setLowStockThreshold(product.id, a5.id, 2)
+    await service.createTransaction({ eventId, items: [item(product.id, a4.id)], cashReceived: 40000 })
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.outOfStock])).toEqual([[a4.id, true]])
+    expect((await service.getBootstrap()).products[0].variants.find((v) => v.id === a5.id)?.lowStockThreshold).toBe(2)
+    await service.saveProduct({ id: product.id, name: product.name, categoryId: product.categoryId, variants: [{ id: a5.id, price: 25000, lowStockThreshold: 5 }, { id: a4.id, price: 40000 }] })
+    expect((await service.getLowStock()).map((v) => [v.variantId, v.threshold])).toEqual([[a4.id, 3], [a5.id, 5]])
+    await service.setLowStockThreshold(product.id, a5.id, null)
+    expect((await service.db.products.get(product.id))?.variants.find((v) => v.id === a5.id)?.lowStockThreshold).toBeUndefined()
+    expect(await code(service.setLowStockThreshold(product.id, a5.id, -1))).toBe('VALIDATION')
+    expect(await service.db.stockMovements.filter((m) => m.reason.includes('menipis')).count()).toBe(0)
   })
 })

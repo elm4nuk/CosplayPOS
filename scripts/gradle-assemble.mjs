@@ -29,9 +29,26 @@ function findJdk() {
   return undefined
 }
 
+function findSdk() {
+  if (process.env.ANDROID_HOME && existsSync(process.env.ANDROID_HOME)) return process.env.ANDROID_HOME
+  if (process.env.LOCALAPPDATA) {
+    const candidate = join(process.env.LOCALAPPDATA, 'Android', 'Sdk')
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
 const javaHome = findJdk()
 if (javaHome && javaHome !== process.env.JAVA_HOME) console.log(`JAVA_HOME tidak di-set di shell ini; memakai ${javaHome}`)
-const env = { ...process.env, ...(javaHome ? { JAVA_HOME: javaHome } : {}) }
+
+const androidHome = findSdk()
+if (androidHome && androidHome !== process.env.ANDROID_HOME) console.log(`ANDROID_HOME tidak di-set di shell ini; memakai ${androidHome}`)
+
+const env = {
+  ...process.env,
+  ...(javaHome ? { JAVA_HOME: javaHome } : {}),
+  ...(androidHome ? { ANDROID_HOME: androidHome } : {})
+}
 
 // Node refuses to spawn .bat files directly (EINVAL, CVE-2024-27980), so go through cmd.exe on Windows.
 const { status, error } = process.platform === 'win32'

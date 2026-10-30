@@ -41,10 +41,25 @@ export function formatReceiptText(tx: Transaction, settings: ReceiptSettings, wi
     rule,
   ]
   for (const item of tx.items) {
-    lines.push(...wrap(`${item.productName} (${item.variantName})`, width))
+    const hasVariant = item.variantName && item.variantName !== 'Default' && item.variantName !== item.productName
+    lines.push(...wrap(hasVariant ? `${item.productName} (${item.variantName})` : item.productName, width))
     lines.push(row(`  ${item.quantity} x ${money(item.price)}`, money(item.price * item.quantity), width))
   }
-  lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width), row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
+  if (tx.discount && tx.discount > 0) {
+    const subtotal = tx.subtotal ?? (tx.total + tx.discount)
+    lines.push(rule)
+    lines.push(row('Subtotal', `Rp ${money(subtotal)}`, width))
+    const promoLabel = tx.promoName ? `Diskon (${tx.promoName})` : 'Diskon Bundle'
+    lines.push(row(promoLabel, `-Rp ${money(tx.discount)}`, width))
+  }
+  lines.push(rule, row('TOTAL', `Rp ${money(tx.total)}`, width))
+  if (tx.paymentMethod === 'qris') {
+    // No gateway exists: the cashier looked at the customer's payment screen. Never print "verified".
+    lines.push(row('Metode', tx.paymentStatus === 'legacy' ? 'QRIS (data lama)' : 'QRIS — dikonfirmasi kasir', width))
+    if (tx.paymentReference) lines.push(row('Ref', tx.paymentReference, width))
+  } else {
+    lines.push(row('Tunai', `Rp ${money(tx.cashReceived)}`, width), row('Kembali', `Rp ${money(tx.change)}`, width))
+  }
   if (tx.status === 'void') lines.push(rule, center('*** DIBATALKAN ***', width))
   if (settings.footer) lines.push(rule, ...settings.footer.split('\n').flatMap((line) => wrap(line, width).map((part) => center(part, width))))
   return lines.join('\n') + '\n'

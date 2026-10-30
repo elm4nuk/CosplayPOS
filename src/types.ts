@@ -8,6 +8,8 @@ export type ProductVariant = {
   price: number
   stock: number
   sku: string
+  /** Per-variant "stok menipis" threshold. Unset = DEFAULT_LOW_STOCK_THRESHOLD (3). */
+  lowStockThreshold?: number
 }
 
 export type Product = {
@@ -16,7 +18,12 @@ export type Product = {
   categoryId: string
   description: string
   accent: string
+  image?: string
+  /** Stable key of the stored photo (`image` is its data URL, filled by getBootstrap). */
+  imageId?: string
   featured?: boolean
+  /** Only set on `BootstrapData.archivedProducts`. */
+  archived?: boolean
   variants: ProductVariant[]
 }
 
@@ -26,6 +33,9 @@ export type BoothEvent = {
   venue: string
   dateLabel: string
   active: boolean
+  /** Only true on `BootstrapData.archivedEvents`; archived events take no new sales. */
+  archived?: boolean
+  archivedAt?: string
 }
 
 export type CartItem = {
@@ -38,6 +48,29 @@ export type CartItem = {
   stock: number
 }
 
+export type PromoBundleItem = {
+  productId: string
+  variantId: string
+  quantity: number
+}
+
+export type PromoBundle = {
+  id: string
+  name: string
+  description?: string
+  price: number
+  items: PromoBundleItem[]
+  active: boolean
+}
+
+export type PaymentMethod = 'cash' | 'qris'
+
+/**
+ * `confirmed`: cash, or QRIS the cashier confirmed manually on screen (no gateway).
+ * `legacy`: QRIS recorded by an older build that did not ask for confirmation.
+ */
+export type PaymentStatus = 'confirmed' | 'legacy'
+
 export type Transaction = {
   id: string
   number: string
@@ -45,9 +78,21 @@ export type Transaction = {
   createdAt: string
   cashierName: string
   items: CartItem[]
+  subtotal?: number
+  discount?: number
+  promoName?: string
+  /** Bundle applied by the service (one per transaction). */
+  bundleId?: string
   total: number
   cashReceived: number
   change: number
+  paymentMethod?: PaymentMethod
+  paymentStatus?: PaymentStatus
+  paymentConfirmedAt?: string
+  paymentConfirmedBy?: string
+  /** Optional short QRIS note typed by the cashier. */
+  paymentReference?: string
+  cashSessionId?: string
   status: 'completed' | 'void'
   voidedAt?: string
   voidReason?: string
@@ -61,6 +106,7 @@ export type StockAdjustment = {
   reason: string
   createdAt: string
   actor: string
+  kind?: 'initial' | 'adjustment' | 'void' | 'opname'
 }
 
 export type BootstrapData = {
@@ -69,4 +115,9 @@ export type BootstrapData = {
   events: BoothEvent[]
   transactions: Transaction[]
   stockAdjustments: StockAdjustment[]
+  bundles: PromoBundle[]
+  /** Archived events: still referenced by old transactions and reports, not selectable for sales. */
+  archivedEvents?: BoothEvent[]
+  /** Archived products: hidden from the till, kept so old sales and voids still resolve. */
+  archivedProducts?: Product[]
 }
