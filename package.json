@@ -1,0 +1,33 @@
+{
+  "name": "kasir-booth-cosplay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistem kasir booth cosplay offline-first: server lokal + SQLite, diakses kasir lewat Wi-Fi LAN.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server/src/index.ts",
+    "dev": "node --watch server/src/index.ts",
+    "seed:demo": "node scripts/seed-demo.ts",
+    "backup": "node scripts/backup.ts",
+    "restore": "node scripts/restore.ts",
+    "smoke:lan": "node scripts/two-cashier-smoke.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/multipart": "^10.1.4",
+    "@fastify/static": "^10.1.6",
+    "fastify": "^5.12.7",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
